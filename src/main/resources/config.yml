@@ -1,0 +1,181 @@
+# ============================================================
+# MDVAspectos - Menu de aspectos por raza
+# ============================================================
+# Usa /aspecto para abrir el catalogo de la raza actual.
+# El plugin detecta la raza con PlaceholderAPI y MMOCore.
+#
+# Recomendado:
+# - PlaceholderAPI instalado.
+# - Expansion de MMOCore funcionando.
+# - SkinsRestorer instalado con skins guardadas: humano_0, orco_0, elfo_0, etc.
+#
+# Si SkinsRestorer API no puede cargar la textura de una head, puedes poner
+# texture-value manual en cada skin.
+
+settings:
+  menu-title: '&8Aspectos: {race_display}'
+  menu-size: 54
+  class-placeholder: '%mmocore_class_id%'
+
+  # Clases/razas que no pueden abrir /aspecto.
+  # Agrega aqui el id real de tu clase default si es distinto.
+  no-race-classes:
+    - ''
+    - 'none'
+    - 'null'
+    - 'sin_clase'
+    - 'sinclase'
+    - 'default'
+
+  # Comando ejecutado desde consola al seleccionar aspecto.
+  # Variables: {player}, {skin}, {catalog}, {race_display}, {skin_display}
+  apply-command: 'skin set {skin} {player}'
+
+  # Si true, intenta usar la API de SkinsRestorer para mostrar las cabezas
+  # con las texturas guardadas. Si falla, usa texture-value o una cabeza normal.
+  use-skinsrestorer-heads: true
+
+  fill-empty-slots: true
+  fill-material: BLACK_STAINED_GLASS_PANE
+  fill-name: ' '
+
+messages:
+  prefix: '&6&l[&5&lMDVCRAFT&6&l]&4> &r'
+  only-player: '&cEste comando solo puede usarlo un jugador.'
+  no-permission: '&cNo tienes permiso para usar este comando.'
+  reloaded: '&aMDVAspectos recargado correctamente.'
+  no-placeholderapi: '&cNo se pudo detectar tu raza porque PlaceholderAPI no esta disponible.'
+  no-race: '&cDebes elegir una raza antes de cambiar tu aspecto. Usa &e/raza&c.'
+  no-catalog: '&cTu raza actual no tiene catalogo de aspectos configurado.'
+  skin-applied: '&eHas cambiado tu aspecto a &a{skin_display}&e.'
+  skin-error: '&cNo se pudo aplicar este aspecto. Avisa a un administrador.'
+
+catalogs:
+  humano:
+    display: '&eHumano'
+    aliases:
+      - 'humano'
+      - 'human'
+      - 'humano_default'
+    skins:
+      humano_0:
+        slot: 20
+        skin: 'humano_0'
+        name: '&eHumano I'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+      humano_1:
+        slot: 21
+        skin: 'humano_1'
+        name: '&eHumano II'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+      humano_2:
+        slot: 22
+        skin: 'humano_2'
+        name: '&eHumano III'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+      humano_3:
+        slot: 23
+        skin: 'humano_3'
+        name: '&eHumano IV'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+      humano_4:
+        slot: 24
+        skin: 'humano_4'
+        name: '&eHumano V'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+      humano_5:
+        slot: 25
+        skin: 'humano_5'
+        name: '&eHumano VI'
+        lore:
+          - '&7Aspecto humano guardado.'
+          - '&eClick para seleccionarlo.'
+
+  orco:
+    display: '&2Orco'
+    aliases:
+      - 'orco'
+      - 'orc'
+      - 'orko'
+    skins:
+      orco_0:
+        slot: 20
+        skin: 'orco_0'
+        name: '&2Orco I'
+        lore:
+          - '&7Aspecto orco guardado.'
+          - '&eClick para seleccionarlo.'
+      orco_1:
+        slot: 21
+        skin: 'orco_1'
+        name: '&2Orco II'
+        lore:
+          - '&7Aspecto orco guardado.'
+          - '&eClick para seleccionarlo.'
+      orco_2:
+        slot: 22
+        skin: 'orco_2'
+        name: '&2Orco III'
+        lore:
+          - '&7Aspecto orco guardado.'
+          - '&eClick para seleccionarlo.'
+      orco_3:
+        slot: 23
+        skin: 'orco_3'
+        name: '&2Orco IV'
+        lore:
+          - '&7Aspecto orco guardado.'
+          - '&eClick para seleccionarlo.'
+      orco_4:
+        slot: 24
+        skin: 'orco_4'
+        name: '&2Orco V'
+        lore:
+          - '&7Aspecto orco guardado.'
+          - '&eClick para seleccionarlo.'
+
+  elfo:
+    display: '&aElfo'
+    aliases:
+      - 'elfo'
+      - 'elf'
+      - 'elfokin'
+    skins:
+      elfo_0:
+        slot: 20
+        skin: 'elfo_0'
+        name: '&aElfo I'
+        lore:
+          - '&7Aspecto elfo guardado.'
+          - '&eClick para seleccionarlo.'
+      elfo_1:
+        slot: 21
+        skin: 'elfo_1'
+        name: '&aElfo II'
+        lore:
+          - '&7Aspecto elfo guardado.'
+          - '&eClick para seleccionarlo.'
+      elfo_2:
+        slot: 22
+        skin: 'elfo_2'
+        name: '&aElfo III'
+        lore:
+          - '&7Aspecto elfo guardado.'
+          - '&eClick para seleccionarlo.'
+      elfo_3:
+        slot: 23
+        skin: 'elfo_3'
+        name: '&aElfo IV'
+        lore:
+          - '&7Aspecto elfo guardado.'
+          - '&eClick para seleccionarlo.'

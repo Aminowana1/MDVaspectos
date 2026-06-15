@@ -1,0 +1,438 @@
+package com.mdvcraft.mdvaspectos;
+
+import me.clip.placeholderapi.PlaceholderAPI;
+import net.skinsrestorer.api.SkinsRestorer;
+import net.skinsrestorer.api.SkinsRestorerProvider;
+import net.skinsrestorer.api.property.InputDataResult;
+import net.skinsrestorer.api.property.SkinProperty;
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.SkullMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.profile.PlayerProfile;
+import org.bukkit.profile.ProfileProperty;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+public final class MDVAspectosPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
+
+    private final Map<String, Catalog> catalogs = new HashMap<>();
+    private final Map<String, Catalog> aliases = new HashMap<>();
+    private final Set<String> noRaceClasses = new HashSet<>();
+    private final Map<String, SkinTexture> textureCache = new ConcurrentHashMap<>();
+
+    private NamespacedKey skinKey;
+    private SkinsRestorer skinsRestorer;
+
+    private String menuTitle;
+    private int menuSize;
+    private String classPlaceholder;
+    private String applyCommand;
+    private boolean useSkinsRestorerHeads;
+    private boolean fillEmptySlots;
+    private Material fillMaterial;
+    private String fillName;
+
+    private String prefix;
+
+    @Override
+    public void onEnable() {
+        saveDefaultConfig();
+        this.skinKey = new NamespacedKey(this, "skin_entry");
+
+        try {
+            this.skinsRestorer = SkinsRestorerProvider.get();
+        } catch (Throwable throwable) {
+            getLogger().warning("No se pudo obtener SkinsRestorer API. Las cabezas usaran texture-value manual o fallback.");
+            this.skinsRestorer = null;
+        }
+
+        loadConfiguration();
+        Objects.requireNonNull(getCommand("aspecto")).setExecutor(this);
+        Objects.requireNonNull(getCommand("aspecto")).setTabCompleter(this);
+        Bukkit.getPluginManager().registerEvents(this, this);
+        getLogger().info("MDVAspectos habilitado con " + catalogs.size() + " catalogos.");
+    }
+
+    private void loadConfiguration() {
+        reloadConfig();
+        textureCache.clear();
+        catalogs.clear();
+        aliases.clear();
+        noRaceClasses.clear();
+
+        menuTitle = color(getConfig().getString("settings.menu-title", "&8Aspectos: {race_display}"));
+        menuSize = normalizeInventorySize(getConfig().getInt("settings.menu-size", 54));
+        classPlaceholder = getConfig().getString("settings.class-placeholder", "%mmocore_class_id%");
+        applyCommand = getConfig().getString("settings.apply-command", "skin set {skin} {player}");
+        useSkinsRestorerHeads = getConfig().getBoolean("settings.use-skinsrestorer-heads", true);
+        fillEmptySlots = getConfig().getBoolean("settings.fill-empty-slots", true);
+        fillName = color(getConfig().getString("settings.fill-name", " "));
+        prefix = color(getConfig().getString("messages.prefix", "&6&l[&5&lMDVCRAFT&6&l]&4> &r"));
+
+        String fillMatName = getConfig().getString("settings.fill-material", "BLACK_STAINED_GLASS_PANE");
+        fillMaterial = Material.matchMaterial(fillMatName == null ? "BLACK_STAINED_GLASS_PANE" : fillMatName);
+        if (fillMaterial == null) fillMaterial = Material.BLACK_STAINED_GLASS_PANE;
+
+        for (String raw : getConfig().getStringList("settings.no-race-classes")) {
+            noRaceClasses.add(normalize(raw));
+        }
+
+        ConfigurationSection catalogsSection = getConfig().getConfigurationSection("catalogs");
+        if (catalogsSection == null) {
+            getLogger().warning("No hay catalogos configurados en config.yml");
+            return;
+        }
+
+        for (String catalogKey : catalogsSection.getKeys(false)) {
+            ConfigurationSection section = catalogsSection.getConfigurationSection(catalogKey);
+            if (section == null) continue;
+
+            String display = color(section.getString("display", catalogKey));
+            Catalog catalog = new Catalog(catalogKey, display, normalizeInventorySize(section.getInt("size", menuSize)));
+
+            List<String> aliasList = section.getStringList("aliases");
+            aliasList.add(catalogKey);
+            for (String alias : aliasList) {
+                catalog.aliases.add(normalize(alias));
+            }
+
+            ConfigurationSection skinsSection = section.getConfigurationSection("skins");
+            if (skinsSection != null) {
+                for (String skinEntryKey : skinsSection.getKeys(false)) {
+                    ConfigurationSection skinSection = skinsSection.getConfigurationSection(skinEntryKey);
+                    if (skinSection == null) continue;
+
+                    int slot = skinSection.getInt("slot", -1);
+                    String skinName = skinSection.getString("skin", skinEntryKey);
+                    String name = color(skinSection.getString("name", "&e" + skinName));
+                    List<String> lore = colorList(skinSection.getStringList("lore"));
+                    String command = skinSection.getString("command", null);
+                    String textureValue = emptyToNull(skinSection.getString("texture-value", null));
+                    String textureSignature = emptyToNull(skinSection.getString("texture-signature", null));
+
+                    SkinEntry entry = new SkinEntry(skinEntryKey, skinName, slot, name, lore, command, textureValue, textureSignature);
+                    catalog.skins.put(skinEntryKey, entry);
+                }
+            }
+
+            catalogs.put(catalogKey, catalog);
+            for (String alias : catalog.aliases) aliases.put(alias, catalog);
+        }
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+            if (!sender.hasPermission("mdvaspectos.reload")) {
+                sender.sendMessage(message("no-permission"));
+                return true;
+            }
+            loadConfiguration();
+            sender.sendMessage(message("reloaded"));
+            return true;
+        }
+
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(message("only-player"));
+            return true;
+        }
+
+        if (!player.hasPermission("mdvaspectos.use")) {
+            player.sendMessage(message("no-permission"));
+            return true;
+        }
+
+        openAspectMenu(player);
+        return true;
+    }
+
+    private void openAspectMenu(Player player) {
+        if (!Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            player.sendMessage(message("no-placeholderapi"));
+            return;
+        }
+
+        String raceRaw = PlaceholderAPI.setPlaceholders(player, classPlaceholder == null ? "%mmocore_class_id%" : classPlaceholder);
+        String race = normalize(raceRaw);
+        if (race.startsWith("%") || noRaceClasses.contains(race)) {
+            player.sendMessage(message("no-race"));
+            return;
+        }
+
+        Catalog catalog = aliases.get(race);
+        if (catalog == null) {
+            player.sendMessage(message("no-catalog"));
+            return;
+        }
+
+        String title = menuTitle.replace("{race}", catalog.key).replace("{race_display}", catalog.display);
+        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key), catalog.size, title);
+
+        if (fillEmptySlots) fillInventory(inventory);
+
+        for (SkinEntry entry : catalog.skins.values()) {
+            if (entry.slot < 0 || entry.slot >= inventory.getSize()) {
+                getLogger().warning("Slot invalido para skin " + entry.key + " en catalogo " + catalog.key + ": " + entry.slot);
+                continue;
+            }
+            inventory.setItem(entry.slot, createSkinItem(entry));
+        }
+
+        player.openInventory(inventory);
+    }
+
+    private void fillInventory(Inventory inventory) {
+        ItemStack filler = new ItemStack(fillMaterial);
+        ItemMeta meta = filler.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(fillName);
+            filler.setItemMeta(meta);
+        }
+        for (int i = 0; i < inventory.getSize(); i++) inventory.setItem(i, filler);
+    }
+
+    private ItemStack createSkinItem(SkinEntry entry) {
+        ItemStack item = new ItemStack(Material.PLAYER_HEAD);
+        SkullMeta meta = (SkullMeta) item.getItemMeta();
+        if (meta == null) return item;
+
+        meta.setDisplayName(entry.name);
+        meta.setLore(entry.lore);
+        setSkinTexture(meta, entry);
+        meta.getPersistentDataContainer().set(skinKey, PersistentDataType.STRING, entry.key);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private void setSkinTexture(SkullMeta meta, SkinEntry entry) {
+        SkinTexture texture = null;
+
+        if (entry.textureValue != null) {
+            texture = new SkinTexture(entry.textureValue, entry.textureSignature);
+        } else if (useSkinsRestorerHeads && skinsRestorer != null) {
+            texture = textureCache.computeIfAbsent(entry.skinName.toLowerCase(Locale.ROOT), ignored -> findSkinRestorerTexture(entry.skinName));
+        }
+
+        if (texture != null && texture.value != null && !texture.value.isBlank()) {
+            try {
+                PlayerProfile profile = Bukkit.createProfile(UUID.randomUUID(), entry.skinName.length() > 16 ? null : entry.skinName);
+                if (texture.signature != null && !texture.signature.isBlank()) {
+                    profile.setProperty(new ProfileProperty("textures", texture.value, texture.signature));
+                } else {
+                    profile.setProperty(new ProfileProperty("textures", texture.value));
+                }
+                meta.setOwnerProfile(profile);
+                return;
+            } catch (Throwable throwable) {
+                getLogger().warning("No se pudo aplicar textura de head para " + entry.skinName + ": " + throwable.getMessage());
+            }
+        }
+
+        try {
+            // Fallback. Solo se vera bien si skinName es un nombre premium o si el cliente lo resuelve.
+            meta.setOwningPlayer(Bukkit.getOfflinePlayer(entry.skinName));
+        } catch (Throwable ignored) {
+            // Si falla, queda como cabeza default.
+        }
+    }
+
+    private SkinTexture findSkinRestorerTexture(String skinName) {
+        try {
+            Optional<InputDataResult> result = skinsRestorer.getSkinStorage().findSkinData(skinName);
+            if (result.isEmpty()) {
+                // Si no existe en cache, intenta encontrar/crear. Para tus skins custom guardadas normalmente no hace falta.
+                result = skinsRestorer.getSkinStorage().findOrCreateSkinData(skinName);
+            }
+            if (result.isPresent()) {
+                SkinProperty property = result.get().getProperty();
+                return new SkinTexture(property.getValue(), property.getSignature());
+            }
+        } catch (Throwable throwable) {
+            getLogger().warning("No se pudo obtener textura de SkinsRestorer para '" + skinName + "': " + throwable.getMessage());
+        }
+        return SkinTexture.EMPTY;
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        if (!(top.getHolder() instanceof AspectMenuHolder holder)) return;
+
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (event.getClickedInventory() == null || !event.getClickedInventory().equals(top)) return;
+
+        ItemStack clicked = event.getCurrentItem();
+        if (clicked == null || clicked.getType().isAir()) return;
+        ItemMeta meta = clicked.getItemMeta();
+        if (meta == null) return;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        String skinEntryKey = pdc.get(skinKey, PersistentDataType.STRING);
+        if (skinEntryKey == null) return;
+
+        Catalog catalog = catalogs.get(holder.catalogKey);
+        if (catalog == null) return;
+        SkinEntry entry = catalog.skins.get(skinEntryKey);
+        if (entry == null) return;
+
+        // Revalidar la raza al hacer click para que nadie pueda mantener un menu viejo abierto.
+        String raceRaw = PlaceholderAPI.setPlaceholders(player, classPlaceholder == null ? "%mmocore_class_id%" : classPlaceholder);
+        Catalog currentCatalog = aliases.get(normalize(raceRaw));
+        if (currentCatalog == null || !currentCatalog.key.equals(catalog.key)) {
+            player.closeInventory();
+            player.sendMessage(message("no-catalog"));
+            return;
+        }
+
+        String cmd = entry.command != null && !entry.command.isBlank() ? entry.command : applyCommand;
+        cmd = cmd.replace("{player}", player.getName())
+                .replace("{skin}", entry.skinName)
+                .replace("{catalog}", catalog.key)
+                .replace("{race_display}", stripColor(catalog.display))
+                .replace("{skin_display}", stripColor(entry.name));
+
+        boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+        player.closeInventory();
+        if (ok) {
+            player.sendMessage(message("skin-applied")
+                    .replace("{skin}", entry.skinName)
+                    .replace("{skin_display}", entry.name));
+        } else {
+            player.sendMessage(message("skin-error"));
+        }
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (args.length == 1 && sender.hasPermission("mdvaspectos.reload")) {
+            if ("reload".startsWith(args[0].toLowerCase(Locale.ROOT))) return Collections.singletonList("reload");
+        }
+        return Collections.emptyList();
+    }
+
+    private String message(String key) {
+        return prefix + color(getConfig().getString("messages." + key, "&cMensaje no configurado: " + key));
+    }
+
+    private static String color(String input) {
+        if (input == null) return "";
+        return ChatColor.translateAlternateColorCodes('&', input);
+    }
+
+    private static List<String> colorList(List<String> input) {
+        List<String> out = new ArrayList<>();
+        for (String line : input) out.add(color(line));
+        return out;
+    }
+
+    private static String stripColor(String input) {
+        return ChatColor.stripColor(color(input));
+    }
+
+    private static String normalize(String input) {
+        if (input == null) return "";
+        String stripped = ChatColor.stripColor(color(input));
+        if (stripped == null) return "";
+        return stripped.trim().toLowerCase(Locale.ROOT).replace(" ", "_");
+    }
+
+    private static String emptyToNull(String input) {
+        if (input == null || input.isBlank()) return null;
+        return input;
+    }
+
+    private static int normalizeInventorySize(int size) {
+        if (size < 9) return 9;
+        if (size > 54) return 54;
+        return ((size + 8) / 9) * 9;
+    }
+
+    private static final class Catalog {
+        private final String key;
+        private final String display;
+        private final int size;
+        private final Set<String> aliases = new HashSet<>();
+        private final Map<String, SkinEntry> skins = new HashMap<>();
+
+        private Catalog(String key, String display, int size) {
+            this.key = key;
+            this.display = display;
+            this.size = size;
+        }
+    }
+
+    private static final class SkinEntry {
+        private final String key;
+        private final String skinName;
+        private final int slot;
+        private final String name;
+        private final List<String> lore;
+        private final String command;
+        private final String textureValue;
+        private final String textureSignature;
+
+        private SkinEntry(String key, String skinName, int slot, String name, List<String> lore, String command, String textureValue, String textureSignature) {
+            this.key = key;
+            this.skinName = skinName;
+            this.slot = slot;
+            this.name = name;
+            this.lore = lore;
+            this.command = command;
+            this.textureValue = textureValue;
+            this.textureSignature = textureSignature;
+        }
+    }
+
+    private static final class SkinTexture {
+        private static final SkinTexture EMPTY = new SkinTexture(null, null);
+        private final String value;
+        private final String signature;
+
+        private SkinTexture(String value, String signature) {
+            this.value = value;
+            this.signature = signature;
+        }
+    }
+
+    private static final class AspectMenuHolder implements InventoryHolder {
+        private final String catalogKey;
+
+        private AspectMenuHolder(String catalogKey) {
+            this.catalogKey = catalogKey;
+        }
+
+        @Override
+        public Inventory getInventory() {
+            return null;
+        }
+    }
+}
