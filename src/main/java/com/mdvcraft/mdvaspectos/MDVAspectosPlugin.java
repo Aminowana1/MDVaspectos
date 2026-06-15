@@ -27,7 +27,6 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
-import org.bukkit.profile.ProfileProperty;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -245,13 +244,10 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         if (texture != null && texture.value != null && !texture.value.isBlank()) {
             try {
                 PlayerProfile profile = Bukkit.createProfile(UUID.randomUUID(), entry.skinName.length() > 16 ? null : entry.skinName);
-                if (texture.signature != null && !texture.signature.isBlank()) {
-                    profile.setProperty(new ProfileProperty("textures", texture.value, texture.signature));
-                } else {
-                    profile.setProperty(new ProfileProperty("textures", texture.value));
+                if (applyTextureProperty(profile, texture)) {
+                    meta.setOwnerProfile(profile);
+                    return;
                 }
-                meta.setOwnerProfile(profile);
-                return;
             } catch (Throwable throwable) {
                 getLogger().warning("No se pudo aplicar textura de head para " + entry.skinName + ": " + throwable.getMessage());
             }
@@ -263,6 +259,45 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         } catch (Throwable ignored) {
             // Si falla, queda como cabeza default.
         }
+    }
+
+    /**
+     * Aplica la propiedad "textures" sin depender de una clase ProfileProperty concreta en compilacion.
+     * En algunas APIs de Paper/Spigot la clase esta en paquetes distintos o no existe como tipo publico.
+     */
+    private boolean applyTextureProperty(PlayerProfile profile, SkinTexture texture) {
+        String value = texture.value;
+        String signature = texture.signature;
+
+        String[] possibleClasses = {
+                "com.destroystokyo.paper.profile.ProfileProperty",
+                "org.bukkit.profile.ProfileProperty"
+        };
+
+        for (String className : possibleClasses) {
+            try {
+                Class<?> propertyClass = Class.forName(className);
+                Object property;
+                if (signature != null && !signature.isBlank()) {
+                    property = propertyClass
+                            .getConstructor(String.class, String.class, String.class)
+                            .newInstance("textures", value, signature);
+                } else {
+                    property = propertyClass
+                            .getConstructor(String.class, String.class)
+                            .newInstance("textures", value);
+                }
+
+                profile.getClass().getMethod("setProperty", propertyClass).invoke(profile, property);
+                return true;
+            } catch (ClassNotFoundException ignored) {
+                // Probar siguiente paquete.
+            } catch (Throwable throwable) {
+                getLogger().fine("No se pudo aplicar ProfileProperty usando " + className + ": " + throwable.getMessage());
+            }
+        }
+
+        return false;
     }
 
     private SkinTexture findSkinRestorerTexture(String skinName) {
