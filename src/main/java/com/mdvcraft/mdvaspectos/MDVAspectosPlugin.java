@@ -27,8 +27,12 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
+import org.bukkit.profile.PlayerTextures;
 
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -45,10 +49,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     private final Map<String, Catalog> catalogs = new HashMap<>();
     private final Map<String, Catalog> aliases = new HashMap<>();
+    private final Map<String, MenuButton> globalButtons = new HashMap<>();
     private final Set<String> noRaceClasses = new HashSet<>();
     private final Map<String, SkinTexture> textureCache = new ConcurrentHashMap<>();
 
     private NamespacedKey skinKey;
+    private NamespacedKey buttonKey;
     private SkinsRestorer skinsRestorer;
 
     private String menuTitle;
@@ -66,6 +72,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     public void onEnable() {
         saveDefaultConfig();
         this.skinKey = new NamespacedKey(this, "skin_entry");
+        this.buttonKey = new NamespacedKey(this, "menu_button");
 
         try {
             this.skinsRestorer = SkinsRestorerProvider.get();
@@ -86,6 +93,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         textureCache.clear();
         catalogs.clear();
         aliases.clear();
+        globalButtons.clear();
         noRaceClasses.clear();
 
         menuTitle = color(getConfig().getString("settings.menu-title", "&8Aspectos: {race_display}"));
@@ -105,6 +113,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             noRaceClasses.add(normalize(raw));
         }
 
+        loadButtons(getConfig().getConfigurationSection("buttons"), globalButtons, "buttons");
+
         ConfigurationSection catalogsSection = getConfig().getConfigurationSection("catalogs");
         if (catalogsSection == null) {
             getLogger().warning("No hay catalogos configurados en config.yml");
@@ -123,6 +133,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             for (String alias : aliasList) {
                 catalog.aliases.add(normalize(alias));
             }
+
+            loadButtons(section.getConfigurationSection("buttons"), catalog.buttons, "catalogs." + catalogKey + ".buttons");
 
             ConfigurationSection skinsSection = section.getConfigurationSection("skins");
             if (skinsSection != null) {
@@ -145,6 +157,36 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
             catalogs.put(catalogKey, catalog);
             for (String alias : catalog.aliases) aliases.put(alias, catalog);
+        }
+    }
+
+    private void loadButtons(ConfigurationSection buttonsSection, Map<String, MenuButton> output, String path) {
+        if (buttonsSection == null) return;
+        for (String key : buttonsSection.getKeys(false)) {
+            ConfigurationSection sec = buttonsSection.getConfigurationSection(key);
+            if (sec == null || !sec.getBoolean("enabled", true)) continue;
+            int slot = sec.getInt("slot", -1);
+            if (slot < 0 || slot >= 54) {
+                getLogger().warning("Slot invalido en " + path + "." + key + ": " + slot);
+                continue;
+            }
+            List<String> commands = new ArrayList<>(sec.getStringList("commands"));
+            String singleCommand = sec.getString("command", "");
+            if (commands.isEmpty() && singleCommand != null && !singleCommand.isBlank()) commands.add(singleCommand);
+            MenuButton button = new MenuButton(
+                    key,
+                    slot,
+                    sec.getString("material", "PAPER"),
+                    Math.max(1, Math.min(64, sec.getInt("amount", 1))),
+                    color(sec.getString("name", sec.getString("display", ""))),
+                    colorList(sec.getStringList("lore")),
+                    sec.getString("head-owner", ""),
+                    readTexture(sec),
+                    commands,
+                    sec.getBoolean("close-on-click", true),
+                    sec.getBoolean("console", false) || sec.getString("run-as", "player").equalsIgnoreCase("console")
+            );
+            output.put(key, button);
         }
     }
 
@@ -206,6 +248,16 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             inventory.setItem(entry.slot, createSkinItem(entry));
         }
 
+        Map<String, MenuButton> visibleButtons = new HashMap<>(globalButtons);
+        visibleButtons.putAll(catalog.buttons);
+        for (MenuButton button : visibleButtons.values()) {
+            if (button.slot < 0 || button.slot >= inventory.getSize()) {
+                getLogger().warning("Slot invalido para boton " + button.key + " en catalogo " + catalog.key + ": " + button.slot);
+                continue;
+            }
+            inventory.setItem(button.slot, createButtonItem(button, player, catalog));
+        }
+
         player.openInventory(inventory);
     }
 
@@ -230,6 +282,78 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         meta.getPersistentDataContainer().set(skinKey, PersistentDataType.STRING, entry.key);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private ItemStack createButtonItem(MenuButton button, Player player, Catalog catalog) {
+        Material material = Material.matchMaterial(button.material == null ? "PAPER" : button.material.toUpperCase(Locale.ROOT));
+        if (material == null) material = Material.PAPER;
+        ItemStack item = new ItemStack(material, button.amount);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+
+        if (material == Material.PLAYER_HEAD && meta instanceof SkullMeta skull) {
+            String texture = applyButtonPlaceholders(button.texture, player, catalog);
+            if (texture != null && !texture.isBlank()) {
+                applyCustomHeadTexture(skull, texture);
+            } else if (button.headOwner != null && !button.headOwner.isBlank()) {
+                skull.setOwningPlayer(Bukkit.getOfflinePlayer(applyButtonPlaceholders(button.headOwner, player, catalog)));
+            }
+            meta = skull;
+        }
+
+        if (button.name != null && !button.name.isBlank()) meta.setDisplayName(applyButtonPlaceholders(button.name, player, catalog));
+        List<String> lore = new ArrayList<>();
+        for (String line : button.lore) lore.add(applyButtonPlaceholders(line, player, catalog));
+        if (!lore.isEmpty()) meta.setLore(lore);
+        meta.getPersistentDataContainer().set(buttonKey, PersistentDataType.STRING, button.key);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private String readTexture(ConfigurationSection sec) {
+        if (sec == null) return "";
+        String texture = sec.getString("custom-head-texture", "");
+        if (texture == null || texture.isBlank()) texture = sec.getString("texture", "");
+        if (texture == null || texture.isBlank()) texture = sec.getString("head-texture", "");
+        if (texture == null || texture.isBlank()) texture = sec.getString("skull-texture", "");
+        if (texture == null || texture.isBlank()) texture = sec.getString("skull_texture", "");
+        if (texture == null || texture.isBlank()) texture = sec.getString("texture-base64", "");
+        return texture == null ? "" : texture.trim();
+    }
+
+    private String extractTextureUrl(String textureValue) {
+        if (textureValue == null) return "";
+        String value = textureValue.trim();
+        if (value.isBlank()) return "";
+        if (value.startsWith("http://") || value.startsWith("https://")) return value;
+        try {
+            String decoded = new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+            int urlKey = decoded.indexOf("\"url\"");
+            if (urlKey < 0) return "";
+            int colon = decoded.indexOf(':', urlKey);
+            if (colon < 0) return "";
+            int firstQuote = decoded.indexOf('"', colon);
+            if (firstQuote < 0) return "";
+            int secondQuote = decoded.indexOf('"', firstQuote + 1);
+            if (secondQuote < 0) return "";
+            return decoded.substring(firstQuote + 1, secondQuote).replace("\\/", "/");
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private void applyCustomHeadTexture(SkullMeta skull, String textureValue) {
+        String textureUrl = extractTextureUrl(textureValue);
+        if (textureUrl == null || textureUrl.isBlank()) return;
+        try {
+            PlayerProfile profile = Bukkit.createPlayerProfile(UUID.randomUUID(), "MDVAspectos");
+            PlayerTextures textures = profile.getTextures();
+            textures.setSkin(new URL(textureUrl));
+            profile.setTextures(textures);
+            skull.setOwnerProfile(profile);
+        } catch (Throwable throwable) {
+            getLogger().warning("No se pudo aplicar textura custom de boton: " + throwable.getClass().getSimpleName() + " - " + throwable.getMessage());
+        }
     }
 
     private void setSkinTexture(SkullMeta meta, SkinEntry entry) {
@@ -331,11 +455,20 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         ItemMeta meta = clicked.getItemMeta();
         if (meta == null) return;
         PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        Catalog catalog = catalogs.get(holder.catalogKey);
+        if (catalog == null) return;
+
+        String buttonEntryKey = pdc.get(buttonKey, PersistentDataType.STRING);
+        if (buttonEntryKey != null) {
+            MenuButton button = catalog.buttons.get(buttonEntryKey);
+            if (button == null) button = globalButtons.get(buttonEntryKey);
+            if (button != null) runButtonCommands(player, catalog, button);
+            return;
+        }
+
         String skinEntryKey = pdc.get(skinKey, PersistentDataType.STRING);
         if (skinEntryKey == null) return;
 
-        Catalog catalog = catalogs.get(holder.catalogKey);
-        if (catalog == null) return;
         SkinEntry entry = catalog.skins.get(skinEntryKey);
         if (entry == null) return;
 
@@ -364,6 +497,33 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         } else {
             player.sendMessage(message("skin-error"));
         }
+    }
+
+    private void runButtonCommands(Player player, Catalog catalog, MenuButton button) {
+        Runnable task = () -> {
+            if (button.closeOnClick) player.closeInventory();
+            for (String raw : button.commands) {
+                String cmd = applyButtonPlaceholders(raw, player, catalog).trim();
+                if (cmd.isBlank()) continue;
+                if (cmd.startsWith("/")) cmd = cmd.substring(1);
+                if (button.console) Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+                else Bukkit.dispatchCommand(player, cmd);
+            }
+        };
+        Bukkit.getScheduler().runTask(this, task);
+    }
+
+    private String applyButtonPlaceholders(String input, Player player, Catalog catalog) {
+        if (input == null) return "";
+        String out = input
+                .replace("{player}", player.getName())
+                .replace("{catalog}", catalog.key)
+                .replace("{race}", catalog.key)
+                .replace("{race_display}", stripColor(catalog.display));
+        if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            try { out = PlaceholderAPI.setPlaceholders(player, out); } catch (Throwable ignored) { }
+        }
+        return out;
     }
 
     @Override
@@ -417,11 +577,40 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         private final int size;
         private final Set<String> aliases = new HashSet<>();
         private final Map<String, SkinEntry> skins = new HashMap<>();
+        private final Map<String, MenuButton> buttons = new HashMap<>();
 
         private Catalog(String key, String display, int size) {
             this.key = key;
             this.display = display;
             this.size = size;
+        }
+    }
+
+    private static final class MenuButton {
+        private final String key;
+        private final int slot;
+        private final String material;
+        private final int amount;
+        private final String name;
+        private final List<String> lore;
+        private final String headOwner;
+        private final String texture;
+        private final List<String> commands;
+        private final boolean closeOnClick;
+        private final boolean console;
+
+        private MenuButton(String key, int slot, String material, int amount, String name, List<String> lore, String headOwner, String texture, List<String> commands, boolean closeOnClick, boolean console) {
+            this.key = key;
+            this.slot = slot;
+            this.material = material == null ? "PAPER" : material;
+            this.amount = amount;
+            this.name = name == null ? "" : name;
+            this.lore = lore == null ? Collections.emptyList() : lore;
+            this.headOwner = headOwner == null ? "" : headOwner;
+            this.texture = texture == null ? "" : texture;
+            this.commands = commands == null ? Collections.emptyList() : commands;
+            this.closeOnClick = closeOnClick;
+            this.console = console;
         }
     }
 

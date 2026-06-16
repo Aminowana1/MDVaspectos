@@ -76,3 +76,45 @@ Sube el proyecto a GitHub, entra a `Actions`, ejecuta `Build MDVAspectos` y desc
 mdvaspectos.use      default: true
 mdvaspectos.reload   default: op
 ```
+
+
+## MDVAspectos 1.0.2
+
+Novedades:
+
+- Agrega `buttons:` globales para mostrar botones extra en todos los catalogos.
+- Agrega `catalogs.<catalogo>.buttons:` para botones especificos por raza/catalogo.
+- Los botones pueden ejecutar comandos como jugador o desde consola.
+- Soporta cabezas custom con `texture`, `custom-head-texture`, `head-texture`, `skull-texture`, `skull_texture` o `texture-base64`.
+
+Ejemplo global:
+
+```yaml
+buttons:
+  social-main:
+    enabled: true
+    slot: 49
+    material: PLAYER_HEAD
+    texture: 'BASE64_DE_CASITA'
+    name: '&a&lMenu principal'
+    lore:
+      - '&7Vuelve al menu principal de MDVSocial.'
+    close-on-click: true
+    commands:
+      - 'social main'
+```
+
+Ejemplo por catalogo:
+
+```yaml
+catalogs:
+  humano:
+    buttons:
+      perfil-social:
+        slot: 48
+        material: PLAYER_HEAD
+        texture: 'BASE64_DE_VOLVER'
+        name: '&6&lVolver al perfil'
+        commands:
+          - 'social perfil'
+```

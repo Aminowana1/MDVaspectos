@@ -39,6 +39,24 @@ settings:
   fill-material: BLACK_STAINED_GLASS_PANE
   fill-name: ' '
 
+
+# Botones globales que aparecen en todos los catalogos.
+# Sirve para volver a MDVSocial u otros menus.
+# Puedes usar texture/custom-head-texture/head-texture/skull_texture con Base64 o URL directa.
+buttons:
+  social-main:
+    enabled: true
+    slot: 49
+    material: COMPASS
+    name: '&a&lMenu principal'
+    lore:
+      - '&7Vuelve al menu principal de MDVSocial.'
+      - ''
+      - '&eClick para volver.'
+    close-on-click: true
+    commands:
+      - 'social main'
+
 messages:
   prefix: '&6&l[&5&lMDVCRAFT&6&l]&4> &r'
   only-player: '&cEste comando solo puede usarlo un jugador.'
