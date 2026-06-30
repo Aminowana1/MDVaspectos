@@ -14,10 +14,14 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -29,6 +33,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
 import org.bukkit.profile.PlayerTextures;
 
+import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -52,6 +58,10 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private final Map<String, MenuButton> globalButtons = new HashMap<>();
     private final Set<String> noRaceClasses = new HashSet<>();
     private final Map<String, SkinTexture> textureCache = new ConcurrentHashMap<>();
+    private final Map<UUID, RememberedSkin> rememberedSkins = new ConcurrentHashMap<>();
+
+    private File skinDataFile;
+    private YamlConfiguration skinData;
 
     private NamespacedKey skinKey;
     private NamespacedKey buttonKey;
@@ -68,9 +78,21 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     private String prefix;
 
+    private boolean skinMemoryEnabled;
+    private boolean skinMemorySaveFromMenu;
+    private boolean skinMemoryListenConsole;
+    private boolean skinMemoryApplyOnJoin;
+    private boolean skinMemoryOnlyConfiguredSkins;
+    private boolean skinMemoryRequireCatalogMatch;
+    private boolean skinMemoryDebug;
+    private String skinMemoryApplyCommand;
+    private int skinMemoryApplyDelaySeconds;
+    private List<Integer> skinMemoryRetryDelaySeconds = Collections.emptyList();
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        this.skinDataFile = new File(getDataFolder(), "skin-memory.yml");
         this.skinKey = new NamespacedKey(this, "skin_entry");
         this.buttonKey = new NamespacedKey(this, "menu_button");
 
@@ -104,6 +126,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         fillEmptySlots = getConfig().getBoolean("settings.fill-empty-slots", true);
         fillName = color(getConfig().getString("settings.fill-name", " "));
         prefix = color(getConfig().getString("messages.prefix", "&6&l[&5&lMDVCRAFT&6&l]&4> &r"));
+
+        loadSkinMemorySettings();
 
         String fillMatName = getConfig().getString("settings.fill-material", "BLACK_STAINED_GLASS_PANE");
         fillMaterial = Material.matchMaterial(fillMatName == null ? "BLACK_STAINED_GLASS_PANE" : fillMatName);
@@ -158,6 +182,180 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             catalogs.put(catalogKey, catalog);
             for (String alias : catalog.aliases) aliases.put(alias, catalog);
         }
+
+        loadRememberedSkins();
+    }
+
+
+    private void loadSkinMemorySettings() {
+        skinMemoryEnabled = getConfig().getBoolean("skin-memory.enabled", true);
+        skinMemorySaveFromMenu = getConfig().getBoolean("skin-memory.save-from-menu", true);
+        skinMemoryListenConsole = getConfig().getBoolean("skin-memory.listen-console-skin-commands", true);
+        skinMemoryApplyOnJoin = getConfig().getBoolean("skin-memory.apply-on-join", true);
+        skinMemoryOnlyConfiguredSkins = getConfig().getBoolean("skin-memory.only-configured-skins", true);
+        skinMemoryRequireCatalogMatch = getConfig().getBoolean("skin-memory.require-current-catalog-match", true);
+        skinMemoryDebug = getConfig().getBoolean("skin-memory.debug", false);
+        skinMemoryApplyCommand = getConfig().getString("skin-memory.apply-command", applyCommand == null ? "skin set {skin} {player}" : applyCommand);
+        skinMemoryApplyDelaySeconds = Math.max(0, getConfig().getInt("skin-memory.apply-delay-seconds", 8));
+
+        List<Integer> delays = new ArrayList<>();
+        for (Integer value : getConfig().getIntegerList("skin-memory.retry-delays-seconds")) {
+            if (value != null && value >= 0) delays.add(value);
+        }
+        skinMemoryRetryDelaySeconds = delays;
+    }
+
+    private void loadRememberedSkins() {
+        rememberedSkins.clear();
+        if (skinDataFile == null) skinDataFile = new File(getDataFolder(), "skin-memory.yml");
+        skinData = YamlConfiguration.loadConfiguration(skinDataFile);
+
+        ConfigurationSection players = skinData.getConfigurationSection("players");
+        if (players == null) return;
+
+        for (String uuidKey : players.getKeys(false)) {
+            try {
+                UUID uuid = UUID.fromString(uuidKey);
+                ConfigurationSection sec = players.getConfigurationSection(uuidKey);
+                if (sec == null) continue;
+                String skin = sec.getString("skin", "");
+                if (skin == null || skin.isBlank()) continue;
+                String playerName = sec.getString("name", "");
+                String catalog = sec.getString("catalog", "");
+                String source = sec.getString("source", "data");
+                long updatedAt = sec.getLong("updated-at", 0L);
+                rememberedSkins.put(uuid, new RememberedSkin(uuid, playerName, skin, catalog, source, updatedAt));
+            } catch (IllegalArgumentException ignored) {
+                getLogger().warning("UUID invalido en skin-memory.yml: " + uuidKey);
+            }
+        }
+    }
+
+    private void saveRememberedSkins() {
+        if (skinDataFile == null) skinDataFile = new File(getDataFolder(), "skin-memory.yml");
+        YamlConfiguration out = new YamlConfiguration();
+        out.set("version", 1);
+        for (RememberedSkin remembered : rememberedSkins.values()) {
+            String base = "players." + remembered.uuid;
+            out.set(base + ".name", remembered.playerName);
+            out.set(base + ".skin", remembered.skinName);
+            out.set(base + ".catalog", remembered.catalogKey);
+            out.set(base + ".source", remembered.source);
+            out.set(base + ".updated-at", remembered.updatedAt);
+        }
+        try {
+            out.save(skinDataFile);
+            skinData = out;
+        } catch (IOException exception) {
+            getLogger().warning("No se pudo guardar skin-memory.yml: " + exception.getMessage());
+        }
+    }
+
+    private void rememberSkin(Player player, Catalog catalog, SkinEntry entry, String source) {
+        if (player == null || catalog == null || entry == null) return;
+        rememberSkin(player, entry.skinName, catalog.key, source);
+    }
+
+    private void rememberSkin(Player player, String skinName, String catalogKey, String source) {
+        if (!skinMemoryEnabled || player == null || skinName == null || skinName.isBlank()) return;
+        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
+            debugSkinMemory("No guardo skin no configurada: " + skinName + " para " + player.getName());
+            return;
+        }
+
+        String resolvedCatalog = catalogKey == null || catalogKey.isBlank() ? findCatalogKeyForSkin(skinName) : catalogKey;
+        RememberedSkin remembered = new RememberedSkin(
+                player.getUniqueId(),
+                player.getName(),
+                skinName,
+                resolvedCatalog == null ? "" : resolvedCatalog,
+                source == null ? "unknown" : source,
+                System.currentTimeMillis()
+        );
+        rememberedSkins.put(player.getUniqueId(), remembered);
+        saveRememberedSkins();
+        debugSkinMemory("Skin guardada: " + player.getName() + " -> " + skinName + " (" + remembered.catalogKey + ", " + remembered.source + ")");
+    }
+
+    private boolean isConfiguredSkin(String skinName) {
+        return findCatalogKeyForSkin(skinName) != null;
+    }
+
+    private String findCatalogKeyForSkin(String skinName) {
+        if (skinName == null) return null;
+        for (Catalog catalog : catalogs.values()) {
+            for (SkinEntry entry : catalog.skins.values()) {
+                if (entry.skinName.equalsIgnoreCase(skinName) || entry.key.equalsIgnoreCase(skinName)) return catalog.key;
+            }
+        }
+        return null;
+    }
+
+    private RememberedSkin getRememberedSkin(Player player) {
+        if (player == null) return null;
+        return rememberedSkins.get(player.getUniqueId());
+    }
+
+    private void scheduleRememberedSkinApply(Player player) {
+        if (!skinMemoryEnabled || !skinMemoryApplyOnJoin || player == null) return;
+        RememberedSkin remembered = getRememberedSkin(player);
+        if (remembered == null || remembered.skinName == null || remembered.skinName.isBlank()) return;
+
+        List<Integer> delays = new ArrayList<>();
+        delays.add(skinMemoryApplyDelaySeconds);
+        delays.addAll(skinMemoryRetryDelaySeconds);
+
+        for (Integer delay : delays) {
+            int safeDelay = delay == null ? 0 : Math.max(0, delay);
+            Bukkit.getScheduler().runTaskLater(this, () -> applyRememberedSkin(player.getUniqueId()), safeDelay * 20L);
+        }
+    }
+
+    private void applyRememberedSkin(UUID uuid) {
+        if (!skinMemoryEnabled || uuid == null) return;
+        Player player = Bukkit.getPlayer(uuid);
+        if (player == null || !player.isOnline()) return;
+        RememberedSkin remembered = rememberedSkins.get(uuid);
+        if (remembered == null || remembered.skinName == null || remembered.skinName.isBlank()) return;
+
+        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(remembered.skinName)) {
+            debugSkinMemory("No reaplico skin no configurada: " + remembered.skinName + " para " + player.getName());
+            return;
+        }
+
+        if (skinMemoryRequireCatalogMatch) {
+            Catalog currentCatalog = resolvePlayerCatalog(player);
+            if (currentCatalog == null) {
+                debugSkinMemory("No pude validar raza/catalogo actual de " + player.getName() + "; no reaplico aun.");
+                return;
+            }
+            if (remembered.catalogKey != null && !remembered.catalogKey.isBlank() && !currentCatalog.key.equalsIgnoreCase(remembered.catalogKey)) {
+                debugSkinMemory("No reaplico " + remembered.skinName + " a " + player.getName() + " porque su catalogo actual es " + currentCatalog.key + " y el guardado es " + remembered.catalogKey + ".");
+                return;
+            }
+        }
+
+        String cmd = skinMemoryApplyCommand == null || skinMemoryApplyCommand.isBlank() ? "skin set {skin} {player}" : skinMemoryApplyCommand;
+        cmd = cmd.replace("{player}", player.getName())
+                .replace("{skin}", remembered.skinName)
+                .replace("{catalog}", remembered.catalogKey == null ? "" : remembered.catalogKey);
+        if (cmd.startsWith("/")) cmd = cmd.substring(1);
+        debugSkinMemory("Reaplicando skin: " + cmd);
+        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+    }
+
+    private Catalog resolvePlayerCatalog(Player player) {
+        if (player == null || !Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) return null;
+        try {
+            String raceRaw = PlaceholderAPI.setPlaceholders(player, classPlaceholder == null ? "%mmocore_class_id%" : classPlaceholder);
+            return aliases.get(normalize(raceRaw));
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void debugSkinMemory(String message) {
+        if (skinMemoryDebug) getLogger().info("[SkinMemory] " + message);
     }
 
     private void loadButtons(ConfigurationSection buttonsSection, Map<String, MenuButton> output, String path) {
@@ -199,6 +397,25 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             }
             loadConfiguration();
             sender.sendMessage(message("reloaded"));
+            return true;
+        }
+
+        if (args.length > 0 && (args[0].equalsIgnoreCase("reaplicar") || args[0].equalsIgnoreCase("aplicar"))) {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(message("only-player"));
+                return true;
+            }
+            if (!player.hasPermission("mdvaspectos.use")) {
+                player.sendMessage(message("no-permission"));
+                return true;
+            }
+            RememberedSkin remembered = getRememberedSkin(player);
+            if (remembered == null) {
+                player.sendMessage(message("skin-memory-empty"));
+                return true;
+            }
+            applyRememberedSkin(player.getUniqueId());
+            player.sendMessage(message("skin-memory-reapplied").replace("{skin}", remembered.skinName));
             return true;
         }
 
@@ -441,6 +658,42 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         return SkinTexture.EMPTY;
     }
 
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        scheduleRememberedSkinApply(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onServerCommand(ServerCommandEvent event) {
+        if (!skinMemoryEnabled || !skinMemoryListenConsole) return;
+        String raw = event.getCommand();
+        if (raw == null || raw.isBlank()) return;
+        String commandLine = raw.trim();
+        if (commandLine.startsWith("/")) commandLine = commandLine.substring(1);
+        String[] parts = commandLine.split("\\s+");
+        if (parts.length < 4) return;
+        if (!parts[0].equalsIgnoreCase("skin")) return;
+        if (!parts[1].equalsIgnoreCase("set")) return;
+
+        String skinName = parts[2];
+        String playerName = parts[3];
+        if (skinName == null || skinName.isBlank() || playerName == null || playerName.isBlank()) return;
+
+        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
+            debugSkinMemory("Comando skin ignorado por no estar en catalogo: " + skinName);
+            return;
+        }
+
+        Player target = Bukkit.getPlayerExact(playerName);
+        if (target == null) {
+            debugSkinMemory("Comando skin ignorado porque el jugador no esta online: " + playerName);
+            return;
+        }
+
+        rememberSkin(target, skinName, findCatalogKeyForSkin(skinName), "console-command");
+    }
+
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
@@ -491,6 +744,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
         player.closeInventory();
         if (ok) {
+            if (skinMemoryEnabled && skinMemorySaveFromMenu) rememberSkin(player, catalog, entry, "menu");
             player.sendMessage(message("skin-applied")
                     .replace("{skin}", entry.skinName)
                     .replace("{skin_display}", entry.name));
@@ -528,8 +782,14 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1 && sender.hasPermission("mdvaspectos.reload")) {
-            if ("reload".startsWith(args[0].toLowerCase(Locale.ROOT))) return Collections.singletonList("reload");
+        if (args.length == 1) {
+            List<String> options = new ArrayList<>();
+            String current = args[0].toLowerCase(Locale.ROOT);
+            if (sender.hasPermission("mdvaspectos.reload") && "reload".startsWith(current)) options.add("reload");
+            if (sender.hasPermission("mdvaspectos.use")) {
+                if ("reaplicar".startsWith(current)) options.add("reaplicar");
+            }
+            return options;
         }
         return Collections.emptyList();
     }
@@ -633,6 +893,25 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             this.command = command;
             this.textureValue = textureValue;
             this.textureSignature = textureSignature;
+        }
+    }
+
+
+    private static final class RememberedSkin {
+        private final UUID uuid;
+        private final String playerName;
+        private final String skinName;
+        private final String catalogKey;
+        private final String source;
+        private final long updatedAt;
+
+        private RememberedSkin(UUID uuid, String playerName, String skinName, String catalogKey, String source, long updatedAt) {
+            this.uuid = uuid;
+            this.playerName = playerName == null ? "" : playerName;
+            this.skinName = skinName == null ? "" : skinName;
+            this.catalogKey = catalogKey == null ? "" : catalogKey;
+            this.source = source == null ? "unknown" : source;
+            this.updatedAt = updatedAt;
         }
     }
 

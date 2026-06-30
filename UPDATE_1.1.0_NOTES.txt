@@ -1,0 +1,19 @@
+MDVAspectos 1.1.0
+
+Nuevo: Skin Memory / Registro de Aspecto.
+
+- Guarda la skin elegida desde /aspecto.
+- Escucha comandos de consola tipo: skin set humano_0 Jugador.
+- Esto permite registrar las skins random aplicadas por MythicMobs al elegir raza.
+- Reaplica la skin guardada al entrar con delay y reintentos.
+- Guarda datos en plugins/MDVAspectos/skin-memory.yml.
+
+Config nueva: skin-memory.
+Comando nuevo: /aspecto reaplicar.
+
+Importante:
+Si ya tienes un config.yml existente, copia el bloque skin-memory y los mensajes nuevos:
+- skin-memory-empty
+- skin-memory-reapplied
+
+No borres la carpeta MDVAspectos.

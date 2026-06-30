@@ -39,6 +39,46 @@ settings:
   fill-material: BLACK_STAINED_GLASS_PANE
   fill-name: ' '
 
+# ============================================================
+# Memoria de aspecto
+# Guarda la skin elegida y la reaplica al entrar.
+# Esto protege contra reinicios donde SkinsRestorer/Mojang fallen
+# y el jugador vuelva a su skin premium/default.
+#
+# Tambien escucha comandos de consola tipo:
+# skin set humano_0 Aminowana
+# Por eso funciona con tus skills random de MythicMobs.
+# ============================================================
+skin-memory:
+  enabled: true
+
+  # Guarda cuando el jugador selecciona una skin desde /aspecto.
+  save-from-menu: true
+
+  # Guarda cuando consola ejecuta: skin set <skin> <player>
+  # Sirve para MythicMobs: command{c="skin set humano_0 <caster.name>";ac=false}
+  listen-console-skin-commands: true
+
+  # Solo guarda/reaplica skins que existan en catalogs.*.skins.
+  # Evita guardar skins premium normales u otros comandos /skin externos.
+  only-configured-skins: true
+
+  # Al entrar, solo reaplica si la skin guardada pertenece a la raza/catalogo actual.
+  # Evita que un jugador orco reciba una skin humana vieja por error.
+  require-current-catalog-match: true
+
+  apply-on-join: true
+  apply-delay-seconds: 8
+  retry-delays-seconds:
+    - 20
+    - 60
+    - 120
+
+  # Comando usado para reaplicar la skin guardada.
+  # Variables: {player}, {skin}, {catalog}
+  apply-command: 'skin set {skin} {player}'
+
+  debug: false
 
 # Botones globales que aparecen en todos los catalogos.
 # Sirve para volver a MDVSocial u otros menus.
@@ -67,6 +107,8 @@ messages:
   no-catalog: '&cTu raza actual no tiene catalogo de aspectos configurado.'
   skin-applied: '&eHas cambiado tu aspecto a &a{skin_display}&e.'
   skin-error: '&cNo se pudo aplicar este aspecto. Avisa a un administrador.'
+  skin-memory-empty: '&cNo tienes ningun aspecto guardado todavia.'
+  skin-memory-reapplied: '&aReaplicando tu aspecto guardado: &e{skin}&a.'
 
 catalogs:
   humano:
