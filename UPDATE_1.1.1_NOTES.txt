@@ -1,0 +1,23 @@
+# MDVAspectos 1.1.1
+
+Añadido guardado seguro de skins libres usadas por jugadores con /skin.
+
+Nuevo en skin-memory:
+- listen-player-skin-commands
+- player-command-require-permission
+- player-command-save-permission
+- player-command-required-permissions
+- player-command-save-delay-ticks
+
+Uso recomendado para permitir skins fuera del catalogo:
+
+skin-memory:
+  listen-player-skin-commands: true
+  only-configured-skins: false
+  require-current-catalog-match: true
+  player-command-require-permission: true
+  player-command-required-permissions:
+    - 'mdvaspectos.skinmemory.free'
+
+Solo entrega mdvaspectos.skinmemory.free a rangos que realmente puedan usar /skin libre.
+Los jugadores sin ese permiso no quedan guardados aunque escriban /skin conan.

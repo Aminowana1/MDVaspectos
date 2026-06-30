@@ -21,6 +21,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -81,6 +82,11 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private boolean skinMemoryEnabled;
     private boolean skinMemorySaveFromMenu;
     private boolean skinMemoryListenConsole;
+    private boolean skinMemoryListenPlayerCommands;
+    private boolean skinMemoryPlayerCommandRequirePermission;
+    private String skinMemoryPlayerCommandSavePermission;
+    private List<String> skinMemoryPlayerCommandRequiredPermissions = Collections.emptyList();
+    private int skinMemoryPlayerCommandSaveDelayTicks;
     private boolean skinMemoryApplyOnJoin;
     private boolean skinMemoryOnlyConfiguredSkins;
     private boolean skinMemoryRequireCatalogMatch;
@@ -191,6 +197,17 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         skinMemoryEnabled = getConfig().getBoolean("skin-memory.enabled", true);
         skinMemorySaveFromMenu = getConfig().getBoolean("skin-memory.save-from-menu", true);
         skinMemoryListenConsole = getConfig().getBoolean("skin-memory.listen-console-skin-commands", true);
+        skinMemoryListenPlayerCommands = getConfig().getBoolean("skin-memory.listen-player-skin-commands", false);
+        skinMemoryPlayerCommandRequirePermission = getConfig().getBoolean("skin-memory.player-command-require-permission", true);
+        skinMemoryPlayerCommandSavePermission = getConfig().getString("skin-memory.player-command-save-permission", "mdvaspectos.skinmemory.free");
+        skinMemoryPlayerCommandSaveDelayTicks = Math.max(0, getConfig().getInt("skin-memory.player-command-save-delay-ticks", 20));
+
+        List<String> requiredPermissions = new ArrayList<>(getConfig().getStringList("skin-memory.player-command-required-permissions"));
+        if (requiredPermissions.isEmpty() && skinMemoryPlayerCommandSavePermission != null && !skinMemoryPlayerCommandSavePermission.isBlank()) {
+            requiredPermissions.add(skinMemoryPlayerCommandSavePermission);
+        }
+        skinMemoryPlayerCommandRequiredPermissions = requiredPermissions;
+
         skinMemoryApplyOnJoin = getConfig().getBoolean("skin-memory.apply-on-join", true);
         skinMemoryOnlyConfiguredSkins = getConfig().getBoolean("skin-memory.only-configured-skins", true);
         skinMemoryRequireCatalogMatch = getConfig().getBoolean("skin-memory.require-current-catalog-match", true);
@@ -665,6 +682,92 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
+        if (!skinMemoryEnabled || !skinMemoryListenPlayerCommands) return;
+        Player player = event.getPlayer();
+        if (player == null) return;
+
+        String skinName = parsePlayerSkinCommand(event.getMessage());
+        if (skinName == null || skinName.isBlank()) return;
+
+        if (skinMemoryPlayerCommandRequirePermission && !hasAllSkinMemoryPlayerPermissions(player)) {
+            debugSkinMemory("Comando /skin de jugador ignorado por falta de permiso: " + player.getName());
+            return;
+        }
+        if (!isSafeSkinCommandArgument(skinName)) {
+            debugSkinMemory("Comando /skin de jugador ignorado por argumento inseguro: " + skinName);
+            return;
+        }
+
+        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
+            debugSkinMemory("Comando /skin de jugador ignorado por no estar en catalogo: " + skinName);
+            return;
+        }
+
+        UUID uuid = player.getUniqueId();
+        String playerName = player.getName();
+        int delay = Math.max(0, skinMemoryPlayerCommandSaveDelayTicks);
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            Player online = Bukkit.getPlayer(uuid);
+            if (online == null || !online.isOnline()) return;
+            rememberSkin(online, skinName, findCatalogKeyForSkin(skinName), "player-command");
+            debugSkinMemory("Skin guardada desde comando de jugador: " + playerName + " -> " + skinName);
+        }, delay);
+    }
+
+    private boolean hasAllSkinMemoryPlayerPermissions(Player player) {
+        if (player == null) return false;
+        if (skinMemoryPlayerCommandRequiredPermissions == null || skinMemoryPlayerCommandRequiredPermissions.isEmpty()) return true;
+        for (String permission : skinMemoryPlayerCommandRequiredPermissions) {
+            if (permission == null || permission.isBlank()) continue;
+            if (!player.hasPermission(permission)) return false;
+        }
+        return true;
+    }
+
+    private String parsePlayerSkinCommand(String rawMessage) {
+        if (rawMessage == null || rawMessage.isBlank()) return null;
+        String commandLine = rawMessage.trim();
+        if (commandLine.startsWith("/")) commandLine = commandLine.substring(1);
+        String[] parts = commandLine.split("\\s+");
+        if (parts.length < 2) return null;
+
+        String commandName = parts[0].toLowerCase(Locale.ROOT);
+        if (commandName.contains(":")) commandName = commandName.substring(commandName.indexOf(':') + 1);
+        if (!commandName.equals("skin")) return null;
+
+        String firstArg = parts[1].toLowerCase(Locale.ROOT);
+        if (firstArg.equals("set")) {
+            if (parts.length < 3) return null;
+            return parts[2];
+        }
+
+        if (isNonSkinSubcommand(firstArg)) return null;
+        return parts[1];
+    }
+
+    private boolean isNonSkinSubcommand(String value) {
+        if (value == null) return true;
+        return value.equals("help")
+                || value.equals("?")
+                || value.equals("clear")
+                || value.equals("reset")
+                || value.equals("update")
+                || value.equals("url")
+                || value.equals("search")
+                || value.equals("gui")
+                || value.equals("menu")
+                || value.equals("reload");
+    }
+
+    private boolean isSafeSkinCommandArgument(String skinName) {
+        if (skinName == null) return false;
+        String trimmed = skinName.trim();
+        if (trimmed.length() < 2 || trimmed.length() > 64) return false;
+        return trimmed.matches("[A-Za-z0-9_\\-]+(?:\\.[A-Za-z0-9_\\-]+)?");
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onServerCommand(ServerCommandEvent event) {
         if (!skinMemoryEnabled || !skinMemoryListenConsole) return;
         String raw = event.getCommand();
@@ -679,6 +782,10 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         String skinName = parts[2];
         String playerName = parts[3];
         if (skinName == null || skinName.isBlank() || playerName == null || playerName.isBlank()) return;
+        if (!isSafeSkinCommandArgument(skinName)) {
+            debugSkinMemory("Comando skin de consola ignorado por argumento inseguro: " + skinName);
+            return;
+        }
 
         if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
             debugSkinMemory("Comando skin ignorado por no estar en catalogo: " + skinName);

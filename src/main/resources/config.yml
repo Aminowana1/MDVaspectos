@@ -59,6 +59,15 @@ skin-memory:
   # Sirve para MythicMobs: command{c="skin set humano_0 <caster.name>";ac=false}
   listen-console-skin-commands: true
 
+  # Guarda comandos de jugador tipo /skin conan o /skin set conan.
+  # Seguridad: solo guarda si el jugador tiene los permisos configurados abajo.
+  listen-player-skin-commands: false
+  player-command-require-permission: true
+  player-command-save-permission: 'mdvaspectos.skinmemory.free'
+  player-command-required-permissions:
+    - 'mdvaspectos.skinmemory.free'
+  player-command-save-delay-ticks: 20
+
   # Solo guarda/reaplica skins que existan en catalogs.*.skins.
   # Evita guardar skins premium normales u otros comandos /skin externos.
   only-configured-skins: true

@@ -118,3 +118,20 @@ catalogs:
         commands:
           - 'social perfil'
 ```
+
+## MDVAspectos 1.1.1 - memoria segura de skins libres
+
+Además de recordar skins del catálogo, esta versión puede recordar comandos de jugador como `/skin conan`, pero solo si está activado y el jugador tiene permiso.
+
+Configuración recomendada para permitir skins fuera del catálogo:
+
+```yaml
+skin-memory:
+  listen-player-skin-commands: true
+  only-configured-skins: false
+  player-command-require-permission: true
+  player-command-required-permissions:
+    - 'mdvaspectos.skinmemory.free'
+```
+
+Da `mdvaspectos.skinmemory.free` solo a rangos que realmente puedan usar skins libres. Los jugadores sin permiso pueden escribir `/skin conan`, pero MDVAspectos no lo guardará.
