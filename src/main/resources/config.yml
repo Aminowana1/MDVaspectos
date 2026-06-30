@@ -113,6 +113,23 @@ race-command-gate:
       - '&6&l[&5&lMDVCRAFT&6&l]&4> &r&cDebes elegir una raza antes de usar comandos.'
       - '&7Abriendo el selector de raza...'
 
+  # Evita spam de mensajes si el jugador insiste en spamear el libro/carteles/comandos.
+  message-cooldown-ms: 1500
+
+  # Bloquea tambien interacciones que no pasan por comando escrito:
+  # - Libro del Viajero / item social de MDVSocial
+  # - Carteles interactivos como RandomTP
+  interactions:
+    enabled: true
+    block-signs: true
+    block-items: true
+    blocked-items:
+      social-menu-book:
+        enabled: true
+        material: BOOK
+        slot: 8
+        name-contains: 'Libro del Viajero'
+
   allowed-commands:
     - 'raza'
     - 'clase'

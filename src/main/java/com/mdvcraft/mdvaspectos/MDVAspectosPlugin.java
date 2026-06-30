@@ -16,15 +16,19 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.server.ServerCommandEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
@@ -105,6 +109,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private List<String> raceCommandGateMessageLines = Collections.emptyList();
     private Set<String> raceCommandGateAllowedCommands = Collections.emptySet();
     private boolean raceCommandGateDebug;
+    private long raceCommandGateMessageCooldownMillis;
+    private boolean raceCommandGateInteractionsEnabled;
+    private boolean raceCommandGateBlockSigns;
+    private boolean raceCommandGateBlockItems;
+    private final Map<String, GateBlockedItem> raceCommandGateBlockedItems = new HashMap<>();
+    private final Map<UUID, Long> raceGateLastNoticeAt = new ConcurrentHashMap<>();
 
     @Override
     public void onEnable() {
@@ -134,6 +144,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         aliases.clear();
         globalButtons.clear();
         noRaceClasses.clear();
+        raceCommandGateBlockedItems.clear();
 
         menuTitle = color(getConfig().getString("settings.menu-title", "&8Aspectos: {race_display}"));
         menuSize = normalizeInventorySize(getConfig().getInt("settings.menu-size", 54));
@@ -244,6 +255,11 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         raceCommandGateMessageEnabled = getConfig().getBoolean("race-command-gate.message.enabled", true);
         raceCommandGateMessageLines = colorList(getConfig().getStringList("race-command-gate.message.text"));
         raceCommandGateDebug = getConfig().getBoolean("race-command-gate.debug", false);
+        raceCommandGateMessageCooldownMillis = Math.max(0L, getConfig().getLong("race-command-gate.message-cooldown-ms", 1500L));
+        raceCommandGateInteractionsEnabled = getConfig().getBoolean("race-command-gate.interactions.enabled", true);
+        raceCommandGateBlockSigns = getConfig().getBoolean("race-command-gate.interactions.block-signs", true);
+        raceCommandGateBlockItems = getConfig().getBoolean("race-command-gate.interactions.block-items", true);
+        loadRaceCommandGateBlockedItems();
 
         Set<String> allowed = new HashSet<>();
         List<String> configured = getConfig().getStringList("race-command-gate.allowed-commands");
@@ -257,6 +273,31 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         String redirect = normalizeCommandName(raceCommandGateRedirectCommand);
         if (!redirect.isBlank()) allowed.add(redirect);
         raceCommandGateAllowedCommands = allowed;
+    }
+
+    private void loadRaceCommandGateBlockedItems() {
+        raceCommandGateBlockedItems.clear();
+        ConfigurationSection section = getConfig().getConfigurationSection("race-command-gate.interactions.blocked-items");
+        if (section == null) return;
+
+        for (String key : section.getKeys(false)) {
+            ConfigurationSection itemSection = section.getConfigurationSection(key);
+            if (itemSection == null || !itemSection.getBoolean("enabled", true)) continue;
+
+            String materialName = itemSection.getString("material", "");
+            Material material = null;
+            if (materialName != null && !materialName.isBlank()) {
+                material = Material.matchMaterial(materialName.toUpperCase(Locale.ROOT));
+                if (material == null) {
+                    getLogger().warning("Material invalido en race-command-gate.interactions.blocked-items." + key + ": " + materialName);
+                    continue;
+                }
+            }
+
+            int slot = itemSection.getInt("slot", -1);
+            String nameContains = normalizePlain(itemSection.getString("name-contains", ""));
+            raceCommandGateBlockedItems.put(key, new GateBlockedItem(key, material, slot, nameContains));
+        }
     }
 
     private void loadRememberedSkins() {
@@ -730,13 +771,54 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         if (raceCommandGateAllowedCommands.contains(commandName)) return;
 
         event.setCancelled(true);
-        debugRaceCommandGate("Bloqueado /" + commandName + " para " + player.getName());
+        handleRaceCommandGateBlock(player, "/" + commandName);
+    }
 
-        if (raceCommandGateMessageEnabled) {
-            if (raceCommandGateMessageLines == null || raceCommandGateMessageLines.isEmpty()) {
-                player.sendMessage(prefix + color("&cDebes elegir una raza antes de usar comandos. Usa &e/raza&c."));
-            } else {
-                for (String line : raceCommandGateMessageLines) player.sendMessage(line);
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
+    public void onRaceInteractionGate(PlayerInteractEvent event) {
+        if (!raceCommandGateEnabled || !raceCommandGateInteractionsEnabled) return;
+        Player player = event.getPlayer();
+        if (player == null || hasRaceCommandGateAccess(player)) return;
+        if (event.getHand() != null && event.getHand() != EquipmentSlot.HAND) return;
+
+        Action action = event.getAction();
+        boolean rightClick = action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK;
+        boolean shouldBlock = false;
+        String reason = "interaction";
+
+        if (rightClick && raceCommandGateBlockItems && matchesRaceGateBlockedItem(player, event.getItem())) {
+            shouldBlock = true;
+            reason = "blocked item";
+        }
+
+        if (rightClick && raceCommandGateBlockSigns && event.getClickedBlock() != null && isSignMaterial(event.getClickedBlock().getType())) {
+            shouldBlock = true;
+            reason = "sign";
+        }
+
+        if (!shouldBlock) return;
+
+        event.setCancelled(true);
+        event.setUseInteractedBlock(Event.Result.DENY);
+        event.setUseItemInHand(Event.Result.DENY);
+        handleRaceCommandGateBlock(player, reason);
+    }
+
+    private void handleRaceCommandGateBlock(Player player, String reason) {
+        if (player == null) return;
+        debugRaceCommandGate("Bloqueado " + reason + " para " + player.getName());
+
+        long now = System.currentTimeMillis();
+        long last = raceGateLastNoticeAt.getOrDefault(player.getUniqueId(), 0L);
+        boolean mayNotify = raceCommandGateMessageCooldownMillis <= 0L || now - last >= raceCommandGateMessageCooldownMillis;
+        if (mayNotify) {
+            raceGateLastNoticeAt.put(player.getUniqueId(), now);
+            if (raceCommandGateMessageEnabled) {
+                if (raceCommandGateMessageLines == null || raceCommandGateMessageLines.isEmpty()) {
+                    player.sendMessage(prefix + color("&cDebes elegir una raza antes de usar comandos. Usa &e/raza&c."));
+                } else {
+                    for (String line : raceCommandGateMessageLines) player.sendMessage(line);
+                }
             }
         }
 
@@ -745,8 +827,33 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         if (redirect.isBlank()) return;
         String finalRedirect = redirect;
         Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (player.isOnline()) Bukkit.dispatchCommand(player, finalRedirect);
+            if (!player.isOnline()) return;
+            player.closeInventory();
+            Bukkit.dispatchCommand(player, finalRedirect);
         }, Math.max(0, raceCommandGateRedirectDelayTicks));
+    }
+
+    private boolean matchesRaceGateBlockedItem(Player player, ItemStack item) {
+        if (player == null || item == null || item.getType().isAir()) return false;
+        if (raceCommandGateBlockedItems.isEmpty()) return false;
+
+        int heldSlot = player.getInventory().getHeldItemSlot();
+        ItemMeta meta = item.getItemMeta();
+        String displayName = meta != null && meta.hasDisplayName() ? normalizePlain(meta.getDisplayName()) : "";
+
+        for (GateBlockedItem blocked : raceCommandGateBlockedItems.values()) {
+            if (blocked.material != null && item.getType() != blocked.material) continue;
+            if (blocked.slot >= 0 && heldSlot != blocked.slot) continue;
+            if (blocked.nameContains != null && !blocked.nameContains.isBlank() && !displayName.contains(blocked.nameContains)) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isSignMaterial(Material material) {
+        if (material == null) return false;
+        String name = material.name();
+        return name.endsWith("_SIGN");
     }
 
     private boolean hasRaceCommandGateAccess(Player player) {
@@ -775,6 +882,13 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         String value = input.trim().toLowerCase(Locale.ROOT);
         if (value.startsWith("/")) value = value.substring(1);
         return value;
+    }
+
+    private static String normalizePlain(String input) {
+        if (input == null) return "";
+        String stripped = ChatColor.stripColor(color(input));
+        if (stripped == null) return "";
+        return stripped.trim().toLowerCase(Locale.ROOT);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -1074,6 +1188,20 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             this.commands = commands == null ? Collections.emptyList() : commands;
             this.closeOnClick = closeOnClick;
             this.console = console;
+        }
+    }
+
+    private static final class GateBlockedItem {
+        private final String key;
+        private final Material material;
+        private final int slot;
+        private final String nameContains;
+
+        private GateBlockedItem(String key, Material material, int slot, String nameContains) {
+            this.key = key == null ? "" : key;
+            this.material = material;
+            this.slot = slot;
+            this.nameContains = nameContains == null ? "" : nameContains;
         }
     }
 

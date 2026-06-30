@@ -1,0 +1,26 @@
+MDVAspectos 1.1.3 - Race Interaction Gate
+
+Cambios:
+- Extiende race-command-gate para bloquear interacciones de jugadores sin raza.
+- Bloquea el Libro del Viajero / item social antes de que abra menús si el jugador no tiene mdvcraft.race.selected.
+- Bloquea click derecho en carteles para evitar que carteles de RandomTP u otros carteles interactivos funcionen antes de elegir raza.
+- Añade message-cooldown-ms para evitar spam de mensajes/redirecciones.
+- Mantiene el bloqueo por comando de la 1.1.2.
+
+Config nueva dentro de race-command-gate:
+  message-cooldown-ms: 1500
+  interactions:
+    enabled: true
+    block-signs: true
+    block-items: true
+    blocked-items:
+      social-menu-book:
+        enabled: true
+        material: BOOK
+        slot: 8
+        name-contains: 'Libro del Viajero'
+
+Notas:
+- El bloqueo de comandos escritos no detecta comandos ejecutados internamente por otros plugins.
+- Por eso esta versión también bloquea las interacciones de item/cartel antes de que esos plugins ejecuten sus acciones.
+- Si un plugin de carteles ignora eventos cancelados, puede requerir también protección en ese plugin concreto, pero esta solución cubre el caso normal de Bukkit/Paper.
