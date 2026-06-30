@@ -89,6 +89,48 @@ skin-memory:
 
   debug: false
 
+# ============================================================
+# Sello de iniciacion / Race Command Gate
+# Bloquea comandos a jugadores que todavia no eligieron raza.
+# Si no tienen required-permission, cualquier comando no permitido
+# se cancela y se redirige a /raza.
+#
+# Dale mdvcraft.race.selected al grupo aventurero.
+# Dale mdvcraft.racegate.bypass a admins/staff.
+# ============================================================
+race-command-gate:
+  enabled: true
+  required-permission: 'mdvcraft.race.selected'
+  bypass-permission: 'mdvcraft.racegate.bypass'
+  allow-ops: true
+
+  redirect-command: 'raza'
+  redirect-delay-ticks: 2
+
+  message:
+    enabled: true
+    text:
+      - '&6&l[&5&lMDVCRAFT&6&l]&4> &r&cDebes elegir una raza antes de usar comandos.'
+      - '&7Abriendo el selector de raza...'
+
+  allowed-commands:
+    - 'raza'
+    - 'clase'
+    - 'class'
+    - 'mmocore:class'
+    - 'login'
+    - 'l'
+    - 'register'
+    - 'reg'
+    - 'authme:login'
+    - 'authme:register'
+    - 'premium'
+    - 'cracked'
+    - 'fastlogin:premium'
+    - 'fastlogin:cracked'
+
+  debug: false
+
 # Botones globales que aparecen en todos los catalogos.
 # Sirve para volver a MDVSocial u otros menus.
 # Puedes usar texture/custom-head-texture/head-texture/skull_texture con Base64 o URL directa.

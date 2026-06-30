@@ -95,6 +95,17 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private int skinMemoryApplyDelaySeconds;
     private List<Integer> skinMemoryRetryDelaySeconds = Collections.emptyList();
 
+    private boolean raceCommandGateEnabled;
+    private String raceCommandGateRequiredPermission;
+    private String raceCommandGateBypassPermission;
+    private boolean raceCommandGateAllowOps;
+    private String raceCommandGateRedirectCommand;
+    private int raceCommandGateRedirectDelayTicks;
+    private boolean raceCommandGateMessageEnabled;
+    private List<String> raceCommandGateMessageLines = Collections.emptyList();
+    private Set<String> raceCommandGateAllowedCommands = Collections.emptySet();
+    private boolean raceCommandGateDebug;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -134,6 +145,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         prefix = color(getConfig().getString("messages.prefix", "&6&l[&5&lMDVCRAFT&6&l]&4> &r"));
 
         loadSkinMemorySettings();
+        loadRaceCommandGateSettings();
 
         String fillMatName = getConfig().getString("settings.fill-material", "BLACK_STAINED_GLASS_PANE");
         fillMaterial = Material.matchMaterial(fillMatName == null ? "BLACK_STAINED_GLASS_PANE" : fillMatName);
@@ -220,6 +232,31 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             if (value != null && value >= 0) delays.add(value);
         }
         skinMemoryRetryDelaySeconds = delays;
+    }
+
+    private void loadRaceCommandGateSettings() {
+        raceCommandGateEnabled = getConfig().getBoolean("race-command-gate.enabled", false);
+        raceCommandGateRequiredPermission = getConfig().getString("race-command-gate.required-permission", "mdvcraft.race.selected");
+        raceCommandGateBypassPermission = getConfig().getString("race-command-gate.bypass-permission", "mdvcraft.racegate.bypass");
+        raceCommandGateAllowOps = getConfig().getBoolean("race-command-gate.allow-ops", true);
+        raceCommandGateRedirectCommand = getConfig().getString("race-command-gate.redirect-command", "raza");
+        raceCommandGateRedirectDelayTicks = Math.max(0, getConfig().getInt("race-command-gate.redirect-delay-ticks", 2));
+        raceCommandGateMessageEnabled = getConfig().getBoolean("race-command-gate.message.enabled", true);
+        raceCommandGateMessageLines = colorList(getConfig().getStringList("race-command-gate.message.text"));
+        raceCommandGateDebug = getConfig().getBoolean("race-command-gate.debug", false);
+
+        Set<String> allowed = new HashSet<>();
+        List<String> configured = getConfig().getStringList("race-command-gate.allowed-commands");
+        if (configured.isEmpty()) {
+            configured = List.of("raza", "clase", "class", "mmocore:class", "login", "l", "register", "reg", "authme:login", "authme:register");
+        }
+        for (String command : configured) {
+            String normalized = normalizeCommandName(command);
+            if (!normalized.isBlank()) allowed.add(normalized);
+        }
+        String redirect = normalizeCommandName(raceCommandGateRedirectCommand);
+        if (!redirect.isBlank()) allowed.add(redirect);
+        raceCommandGateAllowedCommands = allowed;
     }
 
     private void loadRememberedSkins() {
@@ -679,6 +716,65 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         scheduleRememberedSkinApply(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onRaceCommandGate(PlayerCommandPreprocessEvent event) {
+        if (!raceCommandGateEnabled) return;
+        Player player = event.getPlayer();
+        if (player == null) return;
+        if (hasRaceCommandGateAccess(player)) return;
+
+        String commandName = extractCommandName(event.getMessage());
+        if (commandName.isBlank()) return;
+        if (raceCommandGateAllowedCommands.contains(commandName)) return;
+
+        event.setCancelled(true);
+        debugRaceCommandGate("Bloqueado /" + commandName + " para " + player.getName());
+
+        if (raceCommandGateMessageEnabled) {
+            if (raceCommandGateMessageLines == null || raceCommandGateMessageLines.isEmpty()) {
+                player.sendMessage(prefix + color("&cDebes elegir una raza antes de usar comandos. Usa &e/raza&c."));
+            } else {
+                for (String line : raceCommandGateMessageLines) player.sendMessage(line);
+            }
+        }
+
+        String redirect = raceCommandGateRedirectCommand == null ? "raza" : raceCommandGateRedirectCommand.trim();
+        if (redirect.startsWith("/")) redirect = redirect.substring(1);
+        if (redirect.isBlank()) return;
+        String finalRedirect = redirect;
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            if (player.isOnline()) Bukkit.dispatchCommand(player, finalRedirect);
+        }, Math.max(0, raceCommandGateRedirectDelayTicks));
+    }
+
+    private boolean hasRaceCommandGateAccess(Player player) {
+        if (player == null) return true;
+        if (raceCommandGateAllowOps && player.isOp()) return true;
+        if (raceCommandGateBypassPermission != null && !raceCommandGateBypassPermission.isBlank() && player.hasPermission(raceCommandGateBypassPermission)) return true;
+        return raceCommandGateRequiredPermission == null || raceCommandGateRequiredPermission.isBlank() || player.hasPermission(raceCommandGateRequiredPermission);
+    }
+
+    private void debugRaceCommandGate(String message) {
+        if (raceCommandGateDebug) getLogger().info("[RaceCommandGate] " + message);
+    }
+
+    private static String extractCommandName(String rawMessage) {
+        if (rawMessage == null || rawMessage.isBlank()) return "";
+        String commandLine = rawMessage.trim();
+        if (commandLine.startsWith("/")) commandLine = commandLine.substring(1);
+        if (commandLine.isBlank()) return "";
+        String[] parts = commandLine.split("\\s+");
+        if (parts.length == 0) return "";
+        return normalizeCommandName(parts[0]);
+    }
+
+    private static String normalizeCommandName(String input) {
+        if (input == null) return "";
+        String value = input.trim().toLowerCase(Locale.ROOT);
+        if (value.startsWith("/")) value = value.substring(1);
+        return value;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

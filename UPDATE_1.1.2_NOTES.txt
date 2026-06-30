@@ -1,0 +1,27 @@
+# MDVAspectos 1.1.2
+
+## Nuevo: Race Command Gate / Sello de iniciacion
+
+Agrega un bloqueo global de comandos para jugadores que todavia no eligieron raza.
+
+- Revisa PlayerCommandPreprocessEvent antes de que otros plugins procesen el comando.
+- Si el jugador no tiene `mdvcraft.race.selected`, cancela el comando.
+- Manda mensaje configurable.
+- Redirige a `/raza`.
+- Respeta whitelist de comandos como `/login`, `/register`, `/raza` y `/class`.
+- Admins pueden saltarlo con `mdvcraft.racegate.bypass` o por OP si `allow-ops: true`.
+
+## Permisos recomendados
+
+```
+/lp group aventurero permission set mdvcraft.race.selected true
+/lp group admin permission set mdvcraft.racegate.bypass true
+```
+
+## Config nueva
+
+Agregar/copiar el bloque `race-command-gate:` desde el config.yml incluido en el source.
+
+## Rendimiento
+
+El sistema solo revisa comandos cuando un jugador escribe un comando. No usa loops ni tareas repetitivas.

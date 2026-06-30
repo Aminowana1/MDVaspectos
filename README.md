@@ -135,3 +135,17 @@ skin-memory:
 ```
 
 Da `mdvaspectos.skinmemory.free` solo a rangos que realmente puedan usar skins libres. Los jugadores sin permiso pueden escribir `/skin conan`, pero MDVAspectos no lo guardará.
+
+
+## MDVAspectos 1.1.2 - Race Command Gate
+
+Incluye un bloqueo global de comandos para obligar a los jugadores a elegir raza antes de usar el servidor.
+
+Permisos recomendados:
+
+```mcfunction
+/lp group aventurero permission set mdvcraft.race.selected true
+/lp group admin permission set mdvcraft.racegate.bypass true
+```
+
+El bloqueo se configura en `race-command-gate:` dentro de `config.yml`.
