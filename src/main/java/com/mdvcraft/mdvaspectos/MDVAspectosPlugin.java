@@ -525,6 +525,18 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             return true;
         }
 
+        if (args.length > 0 && isRememberSkinSubcommand(args[0])) {
+            return handleRememberSkinCommand(sender, args, false);
+        }
+
+        if (args.length > 0 && isApplySkinSubcommand(args[0])) {
+            return handleRememberSkinCommand(sender, args, true);
+        }
+
+        if (args.length > 0 && isNativeSkinSubcommand(args[0])) {
+            return handleNativeSkinCommand(sender, args);
+        }
+
         if (args.length > 0 && (args[0].equalsIgnoreCase("reaplicar") || args[0].equalsIgnoreCase("aplicar"))) {
             if (!(sender instanceof Player player)) {
                 sender.sendMessage(message("only-player"));
@@ -559,6 +571,87 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         }
 
         openAspectMenu(player);
+        return true;
+    }
+
+    private boolean isRememberSkinSubcommand(String value) {
+        if (value == null) return false;
+        String v = value.toLowerCase(Locale.ROOT);
+        return v.equals("recordar") || v.equals("recordarskin") || v.equals("guardar") || v.equals("guardarskin") || v.equals("remember") || v.equals("rememberskin");
+    }
+
+    private boolean isApplySkinSubcommand(String value) {
+        if (value == null) return false;
+        String v = value.toLowerCase(Locale.ROOT);
+        return v.equals("aplicarskin") || v.equals("applyskin") || v.equals("setskin") || v.equals("set");
+    }
+
+    private boolean isNativeSkinSubcommand(String value) {
+        if (value == null) return false;
+        String v = value.toLowerCase(Locale.ROOT);
+        return v.equals("native") || v.equals("nativa") || v.equals("clearskin") || v.equals("guardarnativa");
+    }
+
+    private boolean handleRememberSkinCommand(CommandSender sender, String[] args, boolean applyAlso) {
+        if (!sender.hasPermission("mdvaspectos.skinmemory.admin") && !sender.hasPermission("mdvaspectos.reload")) {
+            sender.sendMessage(message("no-permission"));
+            return true;
+        }
+        if (args.length < 3) {
+            sender.sendMessage(color("&cUso: /mdvaspectos " + args[0] + " <jugador> <skin>"));
+            return true;
+        }
+        String targetName = args[1];
+        String skinName = args[2];
+        if (!isSafeSkinCommandArgument(targetName) || !isSafeSkinCommandArgument(skinName)) {
+            sender.sendMessage(color("&cJugador o skin invalido."));
+            return true;
+        }
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null || !target.isOnline()) {
+            sender.sendMessage(color("&cEl jugador debe estar conectado para guardar/aplicar la skin."));
+            return true;
+        }
+        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
+            sender.sendMessage(color("&cEsa skin no esta configurada en el catalogo."));
+            return true;
+        }
+
+        if (applyAlso) {
+            String cmd = "skin set " + skinName + " " + target.getName();
+            boolean ok = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+            if (!ok) {
+                sender.sendMessage(color("&cNo se pudo ejecutar: " + cmd));
+                return true;
+            }
+        }
+
+        rememberSkin(target, skinName, findCatalogKeyForSkin(skinName), applyAlso ? "mdvaspectos-applyskin" : "mdvaspectos-remember");
+        sender.sendMessage(color("&aSkin guardada para &e" + target.getName() + "&a: &e" + skinName));
+        return true;
+    }
+
+    private boolean handleNativeSkinCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("mdvaspectos.skinmemory.admin") && !sender.hasPermission("mdvaspectos.reload")) {
+            sender.sendMessage(message("no-permission"));
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(color("&cUso: /mdvaspectos " + args[0] + " <jugador>"));
+            return true;
+        }
+        String targetName = args[1];
+        if (!isSafeSkinCommandArgument(targetName)) {
+            sender.sendMessage(color("&cJugador invalido."));
+            return true;
+        }
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null || !target.isOnline()) {
+            sender.sendMessage(color("&cEl jugador debe estar conectado para guardar skin nativa."));
+            return true;
+        }
+        rememberNativeSkin(target, "mdvaspectos-native-command");
+        sender.sendMessage(color("&aSkin nativa guardada para &e" + target.getName() + "&a."));
         return true;
     }
 
@@ -925,6 +1018,34 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         return stripped.trim().toLowerCase(Locale.ROOT);
     }
 
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
+    public void onPlayerSkinClearCommandEarly(PlayerCommandPreprocessEvent event) {
+        if (!skinMemoryEnabled || !skinMemoryListenPlayerCommands) return;
+        Player player = event.getPlayer();
+        if (player == null) return;
+
+        SkinCommandAction action = parseSkinCommand(event.getMessage(), player.getName(), true);
+        if (action == null || !action.clear) return;
+
+        if (skinMemoryPlayerCommandRequirePermission && !hasAllSkinMemoryPlayerPermissions(player)) {
+            debugSkinMemory("/skin clear temprano ignorado por falta de permiso: " + player.getName());
+            return;
+        }
+
+        String targetName = action.targetName == null || action.targetName.isBlank() ? player.getName() : action.targetName;
+        Player target = Bukkit.getPlayerExact(targetName);
+        if (target == null && targetName.equalsIgnoreCase(player.getName())) target = player;
+        if (target == null || !target.isOnline()) {
+            debugSkinMemory("/skin clear temprano ignorado porque el objetivo no esta online: " + targetName);
+            return;
+        }
+
+        // Guardar antes de que SkinsRestorer u otro plugin pueda cancelar/reprocesar el comando.
+        rememberNativeSkin(target, "player-command-clear-early");
+        debugSkinMemory("Skin nativa guardada temprano desde /skin clear: " + player.getName() + " -> " + target.getName());
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
         if (!skinMemoryEnabled || !skinMemoryListenPlayerCommands) return;
@@ -938,7 +1059,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             debugSkinMemory("Comando /skin de jugador ignorado por falta de permiso: " + player.getName());
             return;
         }
-        if (action.skinName != null && !isSafeSkinCommandArgument(action.skinName)) {
+        if (!action.clear && action.skinName != null && !isSafeSkinCommandArgument(action.skinName)) {
             debugSkinMemory("Comando /skin de jugador ignorado por argumento inseguro: " + action.skinName);
             return;
         }
@@ -1174,6 +1295,11 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             List<String> options = new ArrayList<>();
             String current = args[0].toLowerCase(Locale.ROOT);
             if (sender.hasPermission("mdvaspectos.reload") && "reload".startsWith(current)) options.add("reload");
+            if (sender.hasPermission("mdvaspectos.skinmemory.admin") || sender.hasPermission("mdvaspectos.reload")) {
+                if ("aplicarskin".startsWith(current)) options.add("aplicarskin");
+                if ("recordarskin".startsWith(current)) options.add("recordarskin");
+                if ("nativa".startsWith(current)) options.add("nativa");
+            }
             if (sender.hasPermission("mdvaspectos.use")) {
                 if ("reaplicar".startsWith(current)) options.add("reaplicar");
             }

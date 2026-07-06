@@ -1,0 +1,6 @@
+MDVAspectos 1.1.6
+
+- Fix para /skin clear de jugador/admin.
+- Guarda state: native en LOWEST, antes de que SkinsRestorer u otro plugin pueda cancelar/reprocesar el comando.
+- Mantiene /skin set con delay para guardar la skin ya aplicada.
+- No requiere cambios de config.

@@ -1,0 +1,13 @@
+MDVAspectos 1.1.7
+
+- Corrige /skin clear: ya no se descarta por validacion de argumento vacio.
+- Mantiene guardado temprano de /skin clear para evitar reaplicar la skin anterior.
+- Agrega alias de comando /mdvaspectos y /mdva.
+- Agrega comando administrativo /mdvaspectos aplicarskin <jugador> <skin>, que ejecuta skin set y guarda la skin en skin-memory.yml.
+- Agrega comando administrativo /mdvaspectos recordarskin <jugador> <skin>, que solo guarda la skin en memoria.
+- Agrega comando administrativo /mdvaspectos nativa <jugador>, que guarda estado de skin nativa.
+
+Uso recomendado en MythicMobs para random skins:
+- command{c="mdvaspectos aplicarskin <caster.name> humano_0";ac=false} @self
+
+Esto evita depender de que Bukkit dispare ServerCommandEvent para comandos ejecutados por otros plugins.
