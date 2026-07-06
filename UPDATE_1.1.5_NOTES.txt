@@ -1,0 +1,5 @@
+MDVAspectos 1.1.5
+
+- Corrige /skin clear de jugadores/admins: ahora el estado de skin nativa se guarda inmediatamente.
+- Evita que, si el jugador sale rapido despues de /skin clear, se conserve y reaplique la skin anterior al entrar.
+- Mantiene delay solo para /skin set, porque ahi conviene esperar a que SkinsRestorer aplique la skin.

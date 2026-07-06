@@ -960,17 +960,24 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
         UUID finalTargetUuid = targetUuid;
         String senderName = player.getName();
+
+        // /skin clear debe guardarse de inmediato. No conviene esperar el delay,
+        // porque si el jugador sale rapido antes de que pasen los ticks, se queda
+        // guardada la skin anterior y al entrar se reaplica.
+        if (action.clear) {
+            Player online = Bukkit.getPlayer(finalTargetUuid);
+            if (online == null || !online.isOnline()) return;
+            rememberNativeSkin(online, "player-command-clear");
+            debugSkinMemory("Skin nativa guardada inmediatamente desde comando de jugador: " + senderName + " -> " + online.getName());
+            return;
+        }
+
         int delay = Math.max(0, skinMemoryPlayerCommandSaveDelayTicks);
         Bukkit.getScheduler().runTaskLater(this, () -> {
             Player online = Bukkit.getPlayer(finalTargetUuid);
             if (online == null || !online.isOnline()) return;
-            if (action.clear) {
-                rememberNativeSkin(online, "player-command-clear");
-                debugSkinMemory("Skin nativa guardada desde comando de jugador: " + senderName + " -> " + online.getName());
-            } else {
-                rememberSkin(online, action.skinName, findCatalogKeyForSkin(action.skinName), "player-command");
-                debugSkinMemory("Skin guardada desde comando de jugador: " + senderName + " -> " + online.getName() + " = " + action.skinName);
-            }
+            rememberSkin(online, action.skinName, findCatalogKeyForSkin(action.skinName), "player-command");
+            debugSkinMemory("Skin guardada desde comando de jugador: " + senderName + " -> " + online.getName() + " = " + action.skinName);
         }, delay);
     }
 
