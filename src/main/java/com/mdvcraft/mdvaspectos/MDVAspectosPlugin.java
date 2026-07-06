@@ -313,13 +313,15 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
                 UUID uuid = UUID.fromString(uuidKey);
                 ConfigurationSection sec = players.getConfigurationSection(uuidKey);
                 if (sec == null) continue;
+                String state = sec.getString("state", "skin");
+                boolean nativeSkin = state != null && (state.equalsIgnoreCase("native") || state.equalsIgnoreCase("clear") || state.equalsIgnoreCase("cleared"));
                 String skin = sec.getString("skin", "");
-                if (skin == null || skin.isBlank()) continue;
+                if (!nativeSkin && (skin == null || skin.isBlank())) continue;
                 String playerName = sec.getString("name", "");
                 String catalog = sec.getString("catalog", "");
                 String source = sec.getString("source", "data");
                 long updatedAt = sec.getLong("updated-at", 0L);
-                rememberedSkins.put(uuid, new RememberedSkin(uuid, playerName, skin, catalog, source, updatedAt));
+                rememberedSkins.put(uuid, new RememberedSkin(uuid, playerName, skin, catalog, source, updatedAt, nativeSkin));
             } catch (IllegalArgumentException ignored) {
                 getLogger().warning("UUID invalido en skin-memory.yml: " + uuidKey);
             }
@@ -329,11 +331,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private void saveRememberedSkins() {
         if (skinDataFile == null) skinDataFile = new File(getDataFolder(), "skin-memory.yml");
         YamlConfiguration out = new YamlConfiguration();
-        out.set("version", 1);
+        out.set("version", 2);
         for (RememberedSkin remembered : rememberedSkins.values()) {
             String base = "players." + remembered.uuid;
             out.set(base + ".name", remembered.playerName);
-            out.set(base + ".skin", remembered.skinName);
+            out.set(base + ".state", remembered.nativeSkin ? "native" : "skin");
+            out.set(base + ".skin", remembered.nativeSkin ? "" : remembered.skinName);
             out.set(base + ".catalog", remembered.catalogKey);
             out.set(base + ".source", remembered.source);
             out.set(base + ".updated-at", remembered.updatedAt);
@@ -365,11 +368,28 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
                 skinName,
                 resolvedCatalog == null ? "" : resolvedCatalog,
                 source == null ? "unknown" : source,
-                System.currentTimeMillis()
+                System.currentTimeMillis(),
+                false
         );
         rememberedSkins.put(player.getUniqueId(), remembered);
         saveRememberedSkins();
         debugSkinMemory("Skin guardada: " + player.getName() + " -> " + skinName + " (" + remembered.catalogKey + ", " + remembered.source + ")");
+    }
+
+    private void rememberNativeSkin(Player player, String source) {
+        if (!skinMemoryEnabled || player == null) return;
+        RememberedSkin remembered = new RememberedSkin(
+                player.getUniqueId(),
+                player.getName(),
+                "",
+                "",
+                source == null ? "skin-clear" : source,
+                System.currentTimeMillis(),
+                true
+        );
+        rememberedSkins.put(player.getUniqueId(), remembered);
+        saveRememberedSkins();
+        debugSkinMemory("Skin nativa guardada: " + player.getName() + " (" + remembered.source + ")");
     }
 
     private boolean isConfiguredSkin(String skinName) {
@@ -394,7 +414,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private void scheduleRememberedSkinApply(Player player) {
         if (!skinMemoryEnabled || !skinMemoryApplyOnJoin || player == null) return;
         RememberedSkin remembered = getRememberedSkin(player);
-        if (remembered == null || remembered.skinName == null || remembered.skinName.isBlank()) return;
+        if (remembered == null) return;
+        if (remembered.nativeSkin) {
+            debugSkinMemory("No reaplico skin a " + player.getName() + " porque tiene guardado estado de skin nativa.");
+            return;
+        }
+        if (remembered.skinName == null || remembered.skinName.isBlank()) return;
 
         List<Integer> delays = new ArrayList<>();
         delays.add(skinMemoryApplyDelaySeconds);
@@ -411,7 +436,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         Player player = Bukkit.getPlayer(uuid);
         if (player == null || !player.isOnline()) return;
         RememberedSkin remembered = rememberedSkins.get(uuid);
-        if (remembered == null || remembered.skinName == null || remembered.skinName.isBlank()) return;
+        if (remembered == null) return;
+        if (remembered.nativeSkin) {
+            debugSkinMemory("No reaplico skin a " + player.getName() + " porque tiene guardado estado de skin nativa.");
+            return;
+        }
+        if (remembered.skinName == null || remembered.skinName.isBlank()) return;
 
         if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(remembered.skinName)) {
             debugSkinMemory("No reaplico skin no configurada: " + remembered.skinName + " para " + player.getName());
@@ -507,6 +537,10 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             RememberedSkin remembered = getRememberedSkin(player);
             if (remembered == null) {
                 player.sendMessage(message("skin-memory-empty"));
+                return true;
+            }
+            if (remembered.nativeSkin) {
+                player.sendMessage(message("skin-memory-native"));
                 return true;
             }
             applyRememberedSkin(player.getUniqueId());
@@ -897,31 +931,46 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         Player player = event.getPlayer();
         if (player == null) return;
 
-        String skinName = parsePlayerSkinCommand(event.getMessage());
-        if (skinName == null || skinName.isBlank()) return;
+        SkinCommandAction action = parseSkinCommand(event.getMessage(), player.getName(), true);
+        if (action == null) return;
 
         if (skinMemoryPlayerCommandRequirePermission && !hasAllSkinMemoryPlayerPermissions(player)) {
             debugSkinMemory("Comando /skin de jugador ignorado por falta de permiso: " + player.getName());
             return;
         }
-        if (!isSafeSkinCommandArgument(skinName)) {
-            debugSkinMemory("Comando /skin de jugador ignorado por argumento inseguro: " + skinName);
+        if (action.skinName != null && !isSafeSkinCommandArgument(action.skinName)) {
+            debugSkinMemory("Comando /skin de jugador ignorado por argumento inseguro: " + action.skinName);
             return;
         }
 
-        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
-            debugSkinMemory("Comando /skin de jugador ignorado por no estar en catalogo: " + skinName);
+        if (!action.clear && skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(action.skinName)) {
+            debugSkinMemory("Comando /skin de jugador ignorado por no estar en catalogo: " + action.skinName);
             return;
         }
 
-        UUID uuid = player.getUniqueId();
-        String playerName = player.getName();
+        UUID targetUuid = null;
+        String targetName = action.targetName == null || action.targetName.isBlank() ? player.getName() : action.targetName;
+        Player targetNow = Bukkit.getPlayerExact(targetName);
+        if (targetNow != null) targetUuid = targetNow.getUniqueId();
+        if (targetUuid == null && targetName.equalsIgnoreCase(player.getName())) targetUuid = player.getUniqueId();
+        if (targetUuid == null) {
+            debugSkinMemory("Comando /skin de jugador ignorado porque el objetivo no esta online: " + targetName);
+            return;
+        }
+
+        UUID finalTargetUuid = targetUuid;
+        String senderName = player.getName();
         int delay = Math.max(0, skinMemoryPlayerCommandSaveDelayTicks);
         Bukkit.getScheduler().runTaskLater(this, () -> {
-            Player online = Bukkit.getPlayer(uuid);
+            Player online = Bukkit.getPlayer(finalTargetUuid);
             if (online == null || !online.isOnline()) return;
-            rememberSkin(online, skinName, findCatalogKeyForSkin(skinName), "player-command");
-            debugSkinMemory("Skin guardada desde comando de jugador: " + playerName + " -> " + skinName);
+            if (action.clear) {
+                rememberNativeSkin(online, "player-command-clear");
+                debugSkinMemory("Skin nativa guardada desde comando de jugador: " + senderName + " -> " + online.getName());
+            } else {
+                rememberSkin(online, action.skinName, findCatalogKeyForSkin(action.skinName), "player-command");
+                debugSkinMemory("Skin guardada desde comando de jugador: " + senderName + " -> " + online.getName() + " = " + action.skinName);
+            }
         }, delay);
     }
 
@@ -935,33 +984,51 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         return true;
     }
 
-    private String parsePlayerSkinCommand(String rawMessage) {
+    private SkinCommandAction parseSkinCommand(String rawMessage, String defaultTargetName, boolean allowSelfShortcut) {
         if (rawMessage == null || rawMessage.isBlank()) return null;
         String commandLine = rawMessage.trim();
         if (commandLine.startsWith("/")) commandLine = commandLine.substring(1);
         String[] parts = commandLine.split("\\s+");
         if (parts.length < 2) return null;
 
-        String commandName = parts[0].toLowerCase(Locale.ROOT);
+        String commandName = normalizeCommandName(parts[0]);
         if (commandName.contains(":")) commandName = commandName.substring(commandName.indexOf(':') + 1);
         if (!commandName.equals("skin")) return null;
 
         String firstArg = parts[1].toLowerCase(Locale.ROOT);
+        if (firstArg.equals("clear") || firstArg.equals("reset")) {
+            String target = parts.length >= 3 ? parts[2] : defaultTargetName;
+            return SkinCommandAction.clear(target);
+        }
+
         if (firstArg.equals("set")) {
             if (parts.length < 3) return null;
-            return parts[2];
+            if (parts.length >= 4) return parseTargetedSet(parts[2], parts[3], defaultTargetName);
+            if (!allowSelfShortcut) return null;
+            return SkinCommandAction.set(parts[2], defaultTargetName);
         }
 
         if (isNonSkinSubcommand(firstArg)) return null;
-        return parts[1];
+        if (!allowSelfShortcut) return null;
+        return SkinCommandAction.set(parts[1], defaultTargetName);
+    }
+
+    private SkinCommandAction parseTargetedSet(String first, String second, String defaultTargetName) {
+        if (first == null || second == null) return null;
+        Player secondAsPlayer = Bukkit.getPlayerExact(second);
+        if (secondAsPlayer != null) return SkinCommandAction.set(first, secondAsPlayer.getName());
+
+        Player firstAsPlayer = Bukkit.getPlayerExact(first);
+        if (firstAsPlayer != null) return SkinCommandAction.set(second, firstAsPlayer.getName());
+
+        // Sintaxis principal usada por MDVAspectos/SkinsRestorer en este servidor: skin set <skin> <player>
+        return SkinCommandAction.set(first, second);
     }
 
     private boolean isNonSkinSubcommand(String value) {
         if (value == null) return true;
         return value.equals("help")
                 || value.equals("?")
-                || value.equals("clear")
-                || value.equals("reset")
                 || value.equals("update")
                 || value.equals("url")
                 || value.equals("search")
@@ -980,35 +1047,32 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onServerCommand(ServerCommandEvent event) {
         if (!skinMemoryEnabled || !skinMemoryListenConsole) return;
-        String raw = event.getCommand();
-        if (raw == null || raw.isBlank()) return;
-        String commandLine = raw.trim();
-        if (commandLine.startsWith("/")) commandLine = commandLine.substring(1);
-        String[] parts = commandLine.split("\\s+");
-        if (parts.length < 4) return;
-        if (!parts[0].equalsIgnoreCase("skin")) return;
-        if (!parts[1].equalsIgnoreCase("set")) return;
+        SkinCommandAction action = parseSkinCommand(event.getCommand(), null, false);
+        if (action == null) return;
 
-        String skinName = parts[2];
-        String playerName = parts[3];
-        if (skinName == null || skinName.isBlank() || playerName == null || playerName.isBlank()) return;
-        if (!isSafeSkinCommandArgument(skinName)) {
-            debugSkinMemory("Comando skin de consola ignorado por argumento inseguro: " + skinName);
+        if (action.targetName == null || action.targetName.isBlank()) {
+            debugSkinMemory("Comando skin de consola ignorado porque no tiene objetivo.");
             return;
         }
 
-        if (skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(skinName)) {
-            debugSkinMemory("Comando skin ignorado por no estar en catalogo: " + skinName);
+        if (action.skinName != null && !action.skinName.isBlank() && !isSafeSkinCommandArgument(action.skinName)) {
+            debugSkinMemory("Comando skin de consola ignorado por argumento inseguro: " + action.skinName);
             return;
         }
 
-        Player target = Bukkit.getPlayerExact(playerName);
+        if (!action.clear && skinMemoryOnlyConfiguredSkins && !isConfiguredSkin(action.skinName)) {
+            debugSkinMemory("Comando skin ignorado por no estar en catalogo: " + action.skinName);
+            return;
+        }
+
+        Player target = Bukkit.getPlayerExact(action.targetName);
         if (target == null) {
-            debugSkinMemory("Comando skin ignorado porque el jugador no esta online: " + playerName);
+            debugSkinMemory("Comando skin ignorado porque el jugador no esta online: " + action.targetName);
             return;
         }
 
-        rememberSkin(target, skinName, findCatalogKeyForSkin(skinName), "console-command");
+        if (action.clear) rememberNativeSkin(target, "console-command-clear");
+        else rememberSkin(target, action.skinName, findCatalogKeyForSkin(action.skinName), "console-command");
     }
 
     @EventHandler
@@ -1228,6 +1292,26 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     }
 
 
+    private static final class SkinCommandAction {
+        private final boolean clear;
+        private final String skinName;
+        private final String targetName;
+
+        private SkinCommandAction(boolean clear, String skinName, String targetName) {
+            this.clear = clear;
+            this.skinName = skinName == null ? "" : skinName;
+            this.targetName = targetName == null ? "" : targetName;
+        }
+
+        private static SkinCommandAction set(String skinName, String targetName) {
+            return new SkinCommandAction(false, skinName, targetName);
+        }
+
+        private static SkinCommandAction clear(String targetName) {
+            return new SkinCommandAction(true, "", targetName);
+        }
+    }
+
     private static final class RememberedSkin {
         private final UUID uuid;
         private final String playerName;
@@ -1235,14 +1319,16 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         private final String catalogKey;
         private final String source;
         private final long updatedAt;
+        private final boolean nativeSkin;
 
-        private RememberedSkin(UUID uuid, String playerName, String skinName, String catalogKey, String source, long updatedAt) {
+        private RememberedSkin(UUID uuid, String playerName, String skinName, String catalogKey, String source, long updatedAt, boolean nativeSkin) {
             this.uuid = uuid;
             this.playerName = playerName == null ? "" : playerName;
             this.skinName = skinName == null ? "" : skinName;
             this.catalogKey = catalogKey == null ? "" : catalogKey;
             this.source = source == null ? "unknown" : source;
             this.updatedAt = updatedAt;
+            this.nativeSkin = nativeSkin;
         }
     }
 

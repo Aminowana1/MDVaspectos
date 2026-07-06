@@ -1,0 +1,8 @@
+MDVAspectos 1.1.4
+
+- Skin memory ahora recuerda /skin clear y lo guarda como estado de skin nativa.
+- Si un jugador tiene estado nativo guardado, MDVAspectos no reaplica ninguna skin al entrar.
+- Los comandos de jugador/admin /skin ahora pueden guardar objetivo cuando usan /skin set <skin> <jugador> o /skin set <jugador> <skin>.
+- Se mantiene soporte para comandos de consola/MythicMobs tipo skin set <skin> <jugador>.
+- Se agrega soporte para consola skin clear <jugador>.
+- skin-memory.yml ahora usa version 2 y campo state: skin/native.
