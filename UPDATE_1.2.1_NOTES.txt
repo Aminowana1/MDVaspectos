@@ -1,0 +1,26 @@
+MDVAspectos 1.2.1 - Bedrock pagination/skulls
+============================================================
+
+JAVA
+- config.yml NO fue modificado.
+- El menu Java conserva tamaño, slots, paneles, cabezas y comportamiento.
+
+BEDROCK
+- Inventario fijo de 27 slots para móvil, consola y PC.
+- Sin paneles/fillers.
+- 18 skins por página (slots 0-17 por defecto).
+- Página anterior en slot 18 y siguiente en slot 26.
+- Botón de regreso MDVSocial en slot 22.
+- El título admite {page}, {pages} y {count}.
+- Ya no intenta asignar todas las skins a un layout de 7 slots,
+  por lo que desaparecen los warnings "Slot Bedrock invalido ... -1".
+
+GEYSER CUSTOM SKULLS
+- Cada textura de SkinsRestorer se registra como profile Base64 y además
+  por skin_hash extraído de textures.minecraft.net.
+- Las cabezas Bedrock se construyen mediante la URL de textura y un
+  PlayerProfile estable, para que Geyser pueda asociarlas al hash registrado.
+- Ejecuta /aspecto geysersync tras instalar si quieres forzar la regeneración.
+- Después de que mdvaspectos_skulls.json cambie, reinicia COMPLETAMENTE el
+  servidor para que Geyser regenere su pack de custom skulls.
+- Comprueba en Geyser: gameplay.enable-custom-content: true

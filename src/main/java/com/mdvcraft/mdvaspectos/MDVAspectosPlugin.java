@@ -84,6 +84,20 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private String geyserMappingFileName;
     private boolean geyserSyncDebug;
 
+    // Bedrock inventory pagination. Java never uses these values.
+    private List<Integer> bedrockSkinSlots = List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+    private int bedrockPreviousSlot = 18;
+    private int bedrockNextSlot = 26;
+    private Material bedrockPreviousMaterial = Material.ARROW;
+    private Material bedrockNextMaterial = Material.ARROW;
+    private String bedrockPreviousName = color("&e&lPagina anterior");
+    private String bedrockNextName = color("&e&lPagina siguiente");
+    private List<String> bedrockPreviousLore = List.of(color("&7Toca para volver una pagina."));
+    private List<String> bedrockNextLore = List.of(color("&7Toca para avanzar una pagina."));
+
+    private static final String BEDROCK_PREVIOUS_KEY = "__mdva_bedrock_previous";
+    private static final String BEDROCK_NEXT_KEY = "__mdva_bedrock_next";
+
     private NamespacedKey skinKey;
     private NamespacedKey buttonKey;
     private SkinsRestorer skinsRestorer;
@@ -251,13 +265,37 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         ensureBedrockMenuFile();
         bedrockMenu = YamlConfiguration.loadConfiguration(bedrockMenuFile);
         bedrockMenuEnabled = bedrockMenu.getBoolean("settings.enabled", true);
-        bedrockMenuTitle = color(bedrockMenu.getString("settings.title", "&8Aspectos: {race_display}"));
-        bedrockMenuSize = normalizeInventorySize(bedrockMenu.getInt("settings.size", 27));
-        bedrockFillEmptySlots = bedrockMenu.getBoolean("settings.fill-empty-slots", true);
-        String matName = bedrockMenu.getString("settings.fill-material", "BLACK_STAINED_GLASS_PANE");
-        bedrockFillMaterial = Material.matchMaterial(matName == null ? "BLACK_STAINED_GLASS_PANE" : matName);
-        if (bedrockFillMaterial == null) bedrockFillMaterial = Material.BLACK_STAINED_GLASS_PANE;
-        bedrockFillName = color(bedrockMenu.getString("settings.fill-name", " "));
+        bedrockMenuTitle = color(bedrockMenu.getString("settings.title", "&8Aspectos: {race_display} &7({page}/{pages})"));
+
+        // Bedrock usa siempre un cofre de 3 filas. De esta forma la misma interfaz
+        // se mantiene manejable en tactil, mando y PC y la paginacion es predecible.
+        bedrockMenuSize = 27;
+
+        // 1.2.1: no se colocan paneles/fillers en Bedrock, aunque un aspectos.yml
+        // antiguo todavia tenga fill-empty-slots: true. Java sigue intacto.
+        bedrockFillEmptySlots = false;
+        bedrockFillMaterial = Material.AIR;
+        bedrockFillName = "";
+
+        bedrockSkinSlots = sanitizeBedrockSlots(
+                bedrockMenu.getIntegerList("pagination.skin-slots"),
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+                0, 26
+        );
+        if (bedrockSkinSlots.isEmpty()) {
+            bedrockSkinSlots = List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+        }
+
+        bedrockPreviousSlot = normalizeBedrockControlSlot(bedrockMenu.getInt("pagination.previous.slot", 18), 18);
+        bedrockNextSlot = normalizeBedrockControlSlot(bedrockMenu.getInt("pagination.next.slot", 26), 26);
+        bedrockPreviousMaterial = readBedrockMaterial("pagination.previous.material", Material.ARROW);
+        bedrockNextMaterial = readBedrockMaterial("pagination.next.material", Material.ARROW);
+        bedrockPreviousName = color(bedrockMenu.getString("pagination.previous.name", "&e&lPagina anterior"));
+        bedrockNextName = color(bedrockMenu.getString("pagination.next.name", "&e&lPagina siguiente"));
+        bedrockPreviousLore = colorList(bedrockMenu.getStringList("pagination.previous.lore"));
+        bedrockNextLore = colorList(bedrockMenu.getStringList("pagination.next.lore"));
+        if (bedrockPreviousLore.isEmpty()) bedrockPreviousLore = List.of(color("&7Toca para volver una pagina."));
+        if (bedrockNextLore.isEmpty()) bedrockNextLore = List.of(color("&7Toca para avanzar una pagina."));
 
         geyserSkullSyncEnabled = bedrockMenu.getBoolean("geyser-skulls.enabled", true);
         geyserMappingFileName = bedrockMenu.getString("geyser-skulls.mapping-file", "mdvaspectos_skulls.json");
@@ -317,7 +355,14 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         }
         if (useSkinsRestorerHeads && skinsRestorer != null) {
             SkinTexture texture = textureCache.computeIfAbsent(entry.skinName.toLowerCase(Locale.ROOT), ignored -> findSkinRestorerTexture(entry.skinName));
-            if (texture != null && texture.value != null && !texture.value.isBlank()) profiles.add(texture.value);
+            if (texture != null && texture.value != null && !texture.value.isBlank()) {
+                // Registrar tanto el profile Base64 como el hash de textures.minecraft.net.
+                // El hash hace el matching mucho mas robusto cuando Paper reconstruye
+                // el GameProfile de la cabeza antes de que Geyser traduzca el item.
+                collectTextureForGeyser(texture.value, profiles, skinHashes);
+            } else {
+                getLogger().warning("[Bedrock] No se pudo resolver textura para skin '" + entry.skinName + "'. Esa cabeza usara fallback hasta que exista en SkinsRestorer.");
+            }
         }
     }
 
@@ -335,7 +380,15 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             if (!hash.isBlank()) skinHashes.add(hash);
             return;
         }
+
+        // Geyser acepta directamente el textures property Base64.
         profiles.add(trimmed);
+
+        // Y ademas registramos el hash contenido dentro de ese Base64. Esto cubre
+        // el caso en que Bukkit/Paper normaliza o reconstruye el perfil del skull.
+        String url = extractTextureUrl(trimmed);
+        String hash = extractMinecraftTextureHash(url);
+        if (!hash.isBlank()) skinHashes.add(hash);
     }
 
     private String extractMinecraftTextureHash(String url) {
@@ -355,6 +408,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         StringBuilder out = new StringBuilder(4096);
         out.append("{\n  \"format_version\": 1,\n  \"skulls\": {\n");
         appendJsonArray(out, "username", usernames, 4);
+        out.append(",\n");
+        appendJsonArray(out, "uuid", Collections.emptySet(), 4);
         out.append(",\n");
         appendJsonArray(out, "profile", profiles, 4);
         out.append(",\n");
@@ -889,31 +944,44 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     }
 
     /**
-     * Bedrock sigue usando un inventario real, pero con menos filas, objetivos tactiles grandes
-     * y slots independientes de Java. Las cabezas siguen siendo PLAYER_HEAD: Geyser las
-     * traduce gracias al archivo de custom skull mappings generado por este plugin.
+     * Bedrock sigue usando un inventario real. Desde 1.2.1 usa paginacion fija de
+     * 3 filas: dos filas de aspectos y una fila de navegacion. No hay paneles.
+     * El layout es identico para Bedrock movil, consola y PC; el cliente solo escala
+     * su propia GUI.
      */
     private void openBedrockAspectMenu(Player player, Catalog catalog) {
-        String title = bedrockMenuTitle.replace("{race}", catalog.key).replace("{race_display}", catalog.display);
-        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key, true), bedrockMenuSize, title);
+        openBedrockAspectMenu(player, catalog, 0);
+    }
 
-        if (bedrockFillEmptySlots) fillInventory(inventory, bedrockFillMaterial, bedrockFillName);
-
+    private void openBedrockAspectMenu(Player player, Catalog catalog, int requestedPage) {
         List<SkinEntry> entries = new ArrayList<>(catalog.skins.values());
         entries.sort((a, b) -> {
             int bySlot = Integer.compare(a.slot, b.slot);
             return bySlot != 0 ? bySlot : a.key.compareToIgnoreCase(b.key);
         });
-        List<Integer> slots = resolveBedrockSkinSlots(catalog, entries.size());
 
-        for (int i = 0; i < entries.size(); i++) {
-            SkinEntry entry = entries.get(i);
-            int slot = resolveBedrockSkinSlot(catalog, entry, i, slots);
-            if (slot < 0 || slot >= inventory.getSize()) {
-                getLogger().warning("Slot Bedrock invalido para skin " + entry.key + " en catalogo " + catalog.key + ": " + slot);
-                continue;
-            }
-            inventory.setItem(slot, createBedrockSkinItem(entry, catalog));
+        int pageSize = Math.max(1, bedrockSkinSlots.size());
+        int totalPages = Math.max(1, (entries.size() + pageSize - 1) / pageSize);
+        int page = Math.max(0, Math.min(requestedPage, totalPages - 1));
+        int startIndex = page * pageSize;
+        int endIndex = Math.min(entries.size(), startIndex + pageSize);
+
+        String title = bedrockMenuTitle
+                .replace("{race}", catalog.key)
+                .replace("{race_display}", catalog.display)
+                .replace("{page}", String.valueOf(page + 1))
+                .replace("{pages}", String.valueOf(totalPages))
+                .replace("{count}", String.valueOf(entries.size()));
+        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key, true, page), bedrockMenuSize, title);
+
+        // Intencionalmente NO se rellenan huecos en Bedrock. Los paneles dificultan
+        // la lectura/tacto y el usuario pidio un inventario limpio.
+        for (int index = startIndex; index < endIndex; index++) {
+            int pageIndex = index - startIndex;
+            if (pageIndex >= bedrockSkinSlots.size()) break;
+            int slot = bedrockSkinSlots.get(pageIndex);
+            if (slot < 0 || slot >= inventory.getSize()) continue;
+            inventory.setItem(slot, createBedrockSkinItem(entries.get(index), catalog));
         }
 
         Map<String, MenuButton> visibleButtons = new HashMap<>(globalButtons);
@@ -928,6 +996,15 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             inventory.setItem(bedrockButton.slot, createButtonItem(bedrockButton, player, catalog));
         }
 
+        if (page > 0) {
+            inventory.setItem(bedrockPreviousSlot, createBedrockNavigationItem(
+                    BEDROCK_PREVIOUS_KEY, bedrockPreviousMaterial, bedrockPreviousName, bedrockPreviousLore));
+        }
+        if (page + 1 < totalPages) {
+            inventory.setItem(bedrockNextSlot, createBedrockNavigationItem(
+                    BEDROCK_NEXT_KEY, bedrockNextMaterial, bedrockNextName, bedrockNextLore));
+        }
+
         player.openInventory(inventory);
     }
 
@@ -940,43 +1017,95 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         }
     }
 
+    /**
+     * Construye la cabeza Bedrock usando directamente la URL de textures.minecraft.net
+     * obtenida del profile de SkinsRestorer. Esto evita depender de que el cliente
+     * entienda una propiedad firmada concreta y casa con el skin_hash preregistrado
+     * en Geyser. Java usa createSkinItem() y no pasa por aqui.
+     */
     private ItemStack createBedrockSkinItem(SkinEntry entry, Catalog catalog) {
-        ItemStack item = createSkinItem(entry);
-        ConfigurationSection sec = bedrockMenu == null ? null : bedrockMenu.getConfigurationSection("catalogs." + catalog.key + ".skins." + entry.key);
-        if (sec == null) return item;
-        ItemMeta meta = item.getItemMeta();
+        ItemStack item = new ItemStack(Material.PLAYER_HEAD);
+        SkullMeta meta = (SkullMeta) item.getItemMeta();
         if (meta == null) return item;
-        String name = sec.getString("name", "");
-        if (name != null && !name.isBlank()) meta.setDisplayName(color(name));
-        if (sec.isList("lore")) meta.setLore(colorList(sec.getStringList("lore")));
+
+        meta.setDisplayName(entry.name);
+        meta.setLore(entry.lore);
+
+        SkinTexture texture = resolveSkinTexture(entry);
+        boolean applied = false;
+        if (texture != null && texture.value != null && !texture.value.isBlank()) {
+            String textureUrl = extractTextureUrl(texture.value);
+            if (!textureUrl.isBlank()) {
+                try {
+                    String hash = extractMinecraftTextureHash(textureUrl);
+                    String identity = !hash.isBlank() ? hash : textureUrl;
+                    UUID profileId = UUID.nameUUIDFromBytes(("mdvaspectos:" + identity).getBytes(StandardCharsets.UTF_8));
+                    String profileName = !hash.isBlank() ? "MDVA_" + hash.substring(0, Math.min(8, hash.length())) : "MDVAspectos";
+                    PlayerProfile profile = Bukkit.createPlayerProfile(profileId, profileName);
+                    PlayerTextures textures = profile.getTextures();
+                    textures.setSkin(new URL(textureUrl));
+                    profile.setTextures(textures);
+                    meta.setOwnerProfile(profile);
+                    applied = true;
+                } catch (Throwable throwable) {
+                    getLogger().warning("No se pudo construir head Bedrock para " + entry.skinName + ": " + throwable.getMessage());
+                }
+            }
+        }
+        if (!applied) setSkinTexture(meta, entry);
+
+        ConfigurationSection sec = bedrockMenu == null ? null : bedrockMenu.getConfigurationSection("catalogs." + catalog.key + ".skins." + entry.key);
+        if (sec != null) {
+            String name = sec.getString("name", "");
+            if (name != null && !name.isBlank()) meta.setDisplayName(color(name));
+            if (sec.isList("lore")) meta.setLore(colorList(sec.getStringList("lore")));
+        }
+
+        meta.getPersistentDataContainer().set(skinKey, PersistentDataType.STRING, entry.key);
         item.setItemMeta(meta);
         return item;
     }
 
-    private List<Integer> resolveBedrockSkinSlots(Catalog catalog, int count) {
-        if (bedrockMenu != null) {
-            List<Integer> catalogSlots = bedrockMenu.getIntegerList("catalogs." + catalog.key + ".skin-slots");
-            if (!catalogSlots.isEmpty()) return catalogSlots;
-            List<Integer> layout = bedrockMenu.getIntegerList("layouts." + Math.max(1, Math.min(9, count)));
-            if (!layout.isEmpty()) return layout;
+    private SkinTexture resolveSkinTexture(SkinEntry entry) {
+        if (entry == null) return SkinTexture.EMPTY;
+        if (entry.textureValue != null && !entry.textureValue.isBlank()) {
+            return new SkinTexture(entry.textureValue, entry.textureSignature);
         }
-        return switch (count) {
-            case 1 -> List.of(13);
-            case 2 -> List.of(12, 14);
-            case 3 -> List.of(11, 13, 15);
-            case 4 -> List.of(11, 12, 14, 15);
-            case 5 -> List.of(10, 11, 12, 13, 14);
-            default -> List.of(10, 11, 12, 13, 14, 15, 16);
-        };
+        if (useSkinsRestorerHeads && skinsRestorer != null) {
+            return textureCache.computeIfAbsent(entry.skinName.toLowerCase(Locale.ROOT), ignored -> findSkinRestorerTexture(entry.skinName));
+        }
+        return SkinTexture.EMPTY;
     }
 
-    private int resolveBedrockSkinSlot(Catalog catalog, SkinEntry entry, int index, List<Integer> slots) {
-        if (bedrockMenu != null) {
-            String path = "catalogs." + catalog.key + ".skins." + entry.key + ".slot";
-            if (bedrockMenu.contains(path)) return bedrockMenu.getInt(path);
+    private ItemStack createBedrockNavigationItem(String key, Material material, String name, List<String> lore) {
+        ItemStack item = new ItemStack(material == null ? Material.ARROW : material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+        meta.setDisplayName(name == null ? "" : name);
+        if (lore != null && !lore.isEmpty()) meta.setLore(lore);
+        meta.getPersistentDataContainer().set(buttonKey, PersistentDataType.STRING, key);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private List<Integer> sanitizeBedrockSlots(List<Integer> configured, List<Integer> fallback, int min, int max) {
+        List<Integer> source = configured == null || configured.isEmpty() ? fallback : configured;
+        LinkedHashSet<Integer> clean = new LinkedHashSet<>();
+        for (Integer slot : source) {
+            if (slot != null && slot >= min && slot <= max) clean.add(slot);
         }
-        if (index < slots.size()) return slots.get(index);
-        return -1;
+        return new ArrayList<>(clean);
+    }
+
+    private int normalizeBedrockControlSlot(int slot, int fallback) {
+        return slot >= 0 && slot < 27 ? slot : fallback;
+    }
+
+    private Material readBedrockMaterial(String path, Material fallback) {
+        String raw = bedrockMenu == null ? null : bedrockMenu.getString(path);
+        if (raw == null || raw.isBlank()) return fallback;
+        Material material = Material.matchMaterial(raw.toUpperCase(Locale.ROOT));
+        return material == null ? fallback : material;
     }
 
     private MenuButton resolveBedrockButton(MenuButton base, Catalog catalog) {
@@ -1522,6 +1651,21 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
         String buttonEntryKey = pdc.get(buttonKey, PersistentDataType.STRING);
         if (buttonEntryKey != null) {
+            if (holder.bedrock && BEDROCK_PREVIOUS_KEY.equals(buttonEntryKey)) {
+                int targetPage = Math.max(0, holder.page - 1);
+                Bukkit.getScheduler().runTask(this, () -> {
+                    if (player.isOnline()) openBedrockAspectMenu(player, catalog, targetPage);
+                });
+                return;
+            }
+            if (holder.bedrock && BEDROCK_NEXT_KEY.equals(buttonEntryKey)) {
+                int targetPage = holder.page + 1;
+                Bukkit.getScheduler().runTask(this, () -> {
+                    if (player.isOnline()) openBedrockAspectMenu(player, catalog, targetPage);
+                });
+                return;
+            }
+
             MenuButton button = catalog.buttons.get(buttonEntryKey);
             if (button == null) button = globalButtons.get(buttonEntryKey);
             if (button != null && holder.bedrock) button = resolveBedrockButton(button, catalog);
@@ -1781,10 +1925,16 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private static final class AspectMenuHolder implements InventoryHolder {
         private final String catalogKey;
         private final boolean bedrock;
+        private final int page;
 
         private AspectMenuHolder(String catalogKey, boolean bedrock) {
+            this(catalogKey, bedrock, 0);
+        }
+
+        private AspectMenuHolder(String catalogKey, boolean bedrock, int page) {
             this.catalogKey = catalogKey;
             this.bedrock = bedrock;
+            this.page = Math.max(0, page);
         }
 
         @Override

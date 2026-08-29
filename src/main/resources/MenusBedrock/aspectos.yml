@@ -1,39 +1,79 @@
 # ============================================================
-# MDVAspectos - Menu exclusivo para jugadores Bedrock
+# MDVAspectos 1.2.1 - Menu exclusivo para jugadores Bedrock
 # ============================================================
 # Java NO usa este archivo. El menu Java sigue usando config.yml
-# con sus slots y tamano actuales.
+# exactamente con sus tamaños, slots y comportamiento actuales.
 #
-# Bedrock sigue viendo un inventario real, no un Form.
-# Se usan 3 filas para que sea comodo con tactil, mando y PC.
+# Bedrock sigue viendo un inventario real, NO un Form.
+# El diseño usa siempre 3 filas (27 slots) para que sea el mismo
+# en celular, consola y PC Bedrock.
 #
-# Las cabezas custom se sincronizan con Geyser como Custom Skulls.
-# La primera vez que el mapping cambie, reinicia Geyser/servidor.
+# 1.2.1:
+# - Sin paneles/fillers en Bedrock.
+# - Paginacion real para catalogos grandes.
+# - 18 aspectos por pagina por defecto.
+# - Cabezas construidas por URL/hash y preregistradas en Geyser.
 # ============================================================
 
 settings:
   enabled: true
-  title: '&8Aspectos: {race_display}'
+
+  # Placeholders disponibles:
+  # {race} {race_display} {page} {pages} {count}
+  title: '&8Aspectos: {race_display} &7({page}/{pages})'
+
+  # Bedrock usa siempre 27 slots internamente en 1.2.1.
   size: 27
 
-  fill-empty-slots: true
-  fill-material: BLACK_STAINED_GLASS_PANE
-  fill-name: ' '
+  # Compatibilidad con archivos antiguos. Desde 1.2.1 los fillers
+  # NO se colocan en Bedrock aunque este valor se cambie a true.
+  fill-empty-slots: false
 
-# Distribucion automatica de cabezas segun cuantas skins tenga la raza.
-# Los numeros son slots Bukkit (0-26 en un cofre de 3 filas).
-# Puedes cambiar estos layouts sin afectar Java.
-layouts:
-  '1': [13]
-  '2': [12, 14]
-  '3': [11, 13, 15]
-  '4': [11, 12, 14, 15]
-  '5': [10, 11, 12, 13, 14]
-  '6': [10, 11, 12, 13, 14, 15]
-  '7': [10, 11, 12, 13, 14, 15, 16]
+# ============================================================
+# PAGINACION BEDROCK
+# ============================================================
+# Dos primeras filas: 18 aspectos.
+# Ultima fila: navegacion/botones.
+# Son slots Bukkit 0-26.
+pagination:
+  skin-slots:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
 
-# Botones Bedrock. Si un boton no esta aqui, hereda el de config.yml.
-# Se puede sobrescribir slot, material, nombre, lore y comandos SOLO Bedrock.
+  previous:
+    slot: 18
+    material: ARROW
+    name: '&e&lPagina anterior'
+    lore:
+      - '&7Toca para volver una pagina.'
+
+  next:
+    slot: 26
+    material: ARROW
+    name: '&e&lPagina siguiente'
+    lore:
+      - '&7Toca para avanzar una pagina.'
+
+# ============================================================
+# BOTONES BEDROCK
+# ============================================================
+# Este boton ocupa el centro de la ultima fila.
 buttons:
   social-main:
     enabled: true
@@ -45,18 +85,19 @@ buttons:
       - '&eToca para volver.'
     close-on-click: true
     commands:
-      - 'social main'
+      - 'social menuperfil'
 
-# Opcional: personalizacion por raza/skin SOLO Bedrock.
-# Si no declaras nada, usa el nombre/lore de config.yml y el layout de arriba.
+# ============================================================
+# PERSONALIZACION SOLO BEDROCK
+# ============================================================
+# Las skins se paginan automaticamente; ya NO necesitas indicar slot
+# para cada skin. Puedes sobrescribir nombre/lore sin afectar Java.
 #
 # Ejemplo:
 # catalogs:
 #   humano:
-#     skin-slots: [10, 11, 12, 13, 14, 15]
 #     skins:
 #       humano_0:
-#         slot: 10
 #         name: '&eHumano I'
 #         lore:
 #           - '&7Toca para usar este aspecto.'
@@ -66,16 +107,22 @@ buttons:
 catalogs: {}
 
 # ============================================================
-# Integracion de cabezas custom con Geyser
+# CABEZAS CUSTOM DE GEYSER
 # ============================================================
-# MDVAspectos resuelve las texturas de SkinsRestorer y genera:
+# MDVAspectos obtiene el textures property de SkinsRestorer y genera:
 # plugins/Geyser-Spigot/custom_mappings/mdvaspectos_skulls.json
 #
-# Geyser necesita:
+# Desde 1.2.1 registra DOS identificadores para cada textura:
+# - profile Base64
+# - skin_hash de textures.minecraft.net
+# Esto hace el matching más robusto en inventarios Bedrock.
+#
+# Requisito Geyser:
 # gameplay.enable-custom-content: true
 #
-# Si el JSON cambia, Geyser debe reiniciarse para regenerar su pack de skulls.
-# /geyser reload tambien lo hace, pero EXPULSA a los jugadores Bedrock conectados.
+# IMPORTANTE: cuando el JSON se crea/cambia, haz un REINICIO COMPLETO
+# del servidor para que Geyser regenere y envie su pack de custom skulls.
+# /geyser reload tambien recarga, pero expulsa Bedrock conectado.
 geyser-skulls:
   enabled: true
   mapping-file: 'mdvaspectos_skulls.json'
