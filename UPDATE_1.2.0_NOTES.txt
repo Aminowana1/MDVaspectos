@@ -1,0 +1,21 @@
+MDVAspectos 1.2.0 - Compatibilidad Bedrock/Geyser
+
+- Java conserva el inventario, slots y comportamiento existente de config.yml.
+- Bedrock usa un inventario separado de 27 slots configurable en MenusBedrock/aspectos.yml.
+- Layouts Bedrock centrados para tactil, mando y PC.
+- Deteccion de jugadores Bedrock mediante Geyser API.
+- Sin Forms: sigue siendo inventario/cofre como Java.
+- Sincronizacion automatica de PLAYER_HEAD custom con Geyser Custom Skulls.
+- Las texturas de SkinsRestorer se resuelven y se escriben en:
+  plugins/Geyser-Spigot/custom_mappings/mdvaspectos_skulls.json
+- /aspecto geysersync fuerza una resincronizacion del JSON.
+- Si el mapping cambia, hay que reiniciar Geyser/servidor para que Geyser regenere el pack.
+- Requiere gameplay.enable-custom-content: true en Geyser.
+
+IMPORTANTE PRIMERA ACTUALIZACION:
+1. Instala/compila MDVAspectos 1.2.0 y arranca el servidor.
+2. MDVAspectos generara el mapping a partir de SkinsRestorer.
+3. Si consola indica que el mapping fue actualizado, reinicia el servidor una vez mas.
+4. A partir de ahi los siguientes arranques cargaran el mapping directamente.
+
+No se ejecuta /geyser reload automaticamente porque ese comando expulsa a todos los jugadores Bedrock conectados.

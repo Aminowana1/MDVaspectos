@@ -37,16 +37,20 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
 import org.bukkit.profile.PlayerTextures;
+import org.geysermc.geyser.api.GeyserApi;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -67,6 +71,18 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     private File skinDataFile;
     private YamlConfiguration skinData;
+
+    private File bedrockMenuFile;
+    private YamlConfiguration bedrockMenu;
+    private boolean bedrockMenuEnabled;
+    private String bedrockMenuTitle;
+    private int bedrockMenuSize;
+    private boolean bedrockFillEmptySlots;
+    private Material bedrockFillMaterial;
+    private String bedrockFillName;
+    private boolean geyserSkullSyncEnabled;
+    private String geyserMappingFileName;
+    private boolean geyserSyncDebug;
 
     private NamespacedKey skinKey;
     private NamespacedKey buttonKey;
@@ -120,6 +136,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     public void onEnable() {
         saveDefaultConfig();
         this.skinDataFile = new File(getDataFolder(), "skin-memory.yml");
+        this.bedrockMenuFile = new File(getDataFolder(), "MenusBedrock/aspectos.yml");
+        ensureBedrockMenuFile();
         this.skinKey = new NamespacedKey(this, "skin_entry");
         this.buttonKey = new NamespacedKey(this, "menu_button");
 
@@ -131,6 +149,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         }
 
         loadConfiguration();
+        Bukkit.getScheduler().runTaskLater(this, this::syncGeyserSkullMappings, 20L);
         Objects.requireNonNull(getCommand("aspecto")).setExecutor(this);
         Objects.requireNonNull(getCommand("aspecto")).setTabCompleter(this);
         Bukkit.getPluginManager().registerEvents(this, this);
@@ -139,6 +158,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     private void loadConfiguration() {
         reloadConfig();
+        loadBedrockMenuConfiguration();
         textureCache.clear();
         catalogs.clear();
         aliases.clear();
@@ -215,6 +235,152 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         loadRememberedSkins();
     }
 
+
+    private void ensureBedrockMenuFile() {
+        try {
+            if (bedrockMenuFile.getParentFile() != null && !bedrockMenuFile.getParentFile().exists()) {
+                bedrockMenuFile.getParentFile().mkdirs();
+            }
+            if (!bedrockMenuFile.exists()) saveResource("MenusBedrock/aspectos.yml", false);
+        } catch (Throwable throwable) {
+            getLogger().warning("No se pudo crear MenusBedrock/aspectos.yml: " + throwable.getMessage());
+        }
+    }
+
+    private void loadBedrockMenuConfiguration() {
+        ensureBedrockMenuFile();
+        bedrockMenu = YamlConfiguration.loadConfiguration(bedrockMenuFile);
+        bedrockMenuEnabled = bedrockMenu.getBoolean("settings.enabled", true);
+        bedrockMenuTitle = color(bedrockMenu.getString("settings.title", "&8Aspectos: {race_display}"));
+        bedrockMenuSize = normalizeInventorySize(bedrockMenu.getInt("settings.size", 27));
+        bedrockFillEmptySlots = bedrockMenu.getBoolean("settings.fill-empty-slots", true);
+        String matName = bedrockMenu.getString("settings.fill-material", "BLACK_STAINED_GLASS_PANE");
+        bedrockFillMaterial = Material.matchMaterial(matName == null ? "BLACK_STAINED_GLASS_PANE" : matName);
+        if (bedrockFillMaterial == null) bedrockFillMaterial = Material.BLACK_STAINED_GLASS_PANE;
+        bedrockFillName = color(bedrockMenu.getString("settings.fill-name", " "));
+
+        geyserSkullSyncEnabled = bedrockMenu.getBoolean("geyser-skulls.enabled", true);
+        geyserMappingFileName = bedrockMenu.getString("geyser-skulls.mapping-file", "mdvaspectos_skulls.json");
+        if (geyserMappingFileName == null || geyserMappingFileName.isBlank()) geyserMappingFileName = "mdvaspectos_skulls.json";
+        if (!geyserMappingFileName.toLowerCase(Locale.ROOT).endsWith(".json")) geyserMappingFileName += ".json";
+        geyserSyncDebug = bedrockMenu.getBoolean("geyser-skulls.debug", false);
+    }
+
+    /**
+     * Genera el mapping oficial de custom skulls de Geyser. Geyser carga estos mappings
+     * al iniciar; por eso, si el archivo cambia, el log pide reiniciar Geyser/servidor.
+     */
+    private boolean syncGeyserSkullMappings() {
+        if (!geyserSkullSyncEnabled) return false;
+        try {
+            GeyserApi api = GeyserApi.api();
+            if (api == null) {
+                getLogger().warning("Geyser API no esta disponible; no se genero el mapping de cabezas Bedrock.");
+                return false;
+            }
+
+            LinkedHashSet<String> usernames = new LinkedHashSet<>();
+            LinkedHashSet<String> profiles = new LinkedHashSet<>();
+            LinkedHashSet<String> skinHashes = new LinkedHashSet<>();
+
+            for (Catalog catalog : catalogs.values()) {
+                for (SkinEntry entry : catalog.skins.values()) collectSkinEntryForGeyser(entry, profiles, skinHashes);
+                for (MenuButton button : catalog.buttons.values()) collectButtonForGeyser(button, usernames, profiles, skinHashes);
+            }
+            for (MenuButton button : globalButtons.values()) collectButtonForGeyser(button, usernames, profiles, skinHashes);
+
+            String json = buildGeyserSkullsJson(usernames, profiles, skinHashes);
+            Path mappingsDir = api.configDirectory().resolve("custom_mappings");
+            Files.createDirectories(mappingsDir);
+            Path target = mappingsDir.resolve(geyserMappingFileName);
+            String previous = Files.exists(target) ? Files.readString(target, StandardCharsets.UTF_8) : null;
+            if (json.equals(previous)) {
+                if (geyserSyncDebug) getLogger().info("[Bedrock] Mapping de skulls sin cambios: " + target);
+                return false;
+            }
+            Files.writeString(target, json, StandardCharsets.UTF_8);
+            getLogger().warning("[Bedrock] Mapping de cabezas actualizado: " + target);
+            getLogger().warning("[Bedrock] Reinicia Geyser o el servidor para que las cabezas custom aparezcan en inventarios Bedrock. /geyser reload tambien funciona, pero expulsa a los jugadores Bedrock conectados.");
+            getLogger().info("[Bedrock] Registradas " + profiles.size() + " texturas de perfil, " + skinHashes.size() + " hashes y " + usernames.size() + " usernames.");
+            return true;
+        } catch (Throwable throwable) {
+            getLogger().warning("No se pudo sincronizar custom skulls con Geyser: " + throwable.getClass().getSimpleName() + " - " + throwable.getMessage());
+            return false;
+        }
+    }
+
+    private void collectSkinEntryForGeyser(SkinEntry entry, Set<String> profiles, Set<String> skinHashes) {
+        if (entry == null) return;
+        if (entry.textureValue != null && !entry.textureValue.isBlank()) {
+            collectTextureForGeyser(entry.textureValue, profiles, skinHashes);
+            return;
+        }
+        if (useSkinsRestorerHeads && skinsRestorer != null) {
+            SkinTexture texture = textureCache.computeIfAbsent(entry.skinName.toLowerCase(Locale.ROOT), ignored -> findSkinRestorerTexture(entry.skinName));
+            if (texture != null && texture.value != null && !texture.value.isBlank()) profiles.add(texture.value);
+        }
+    }
+
+    private void collectButtonForGeyser(MenuButton button, Set<String> usernames, Set<String> profiles, Set<String> skinHashes) {
+        if (button == null || button.material == null || !button.material.equalsIgnoreCase("PLAYER_HEAD")) return;
+        if (button.texture != null && !button.texture.isBlank()) collectTextureForGeyser(button.texture, profiles, skinHashes);
+        else if (button.headOwner != null && !button.headOwner.isBlank() && !button.headOwner.contains("{") && !button.headOwner.contains("%")) usernames.add(button.headOwner);
+    }
+
+    private void collectTextureForGeyser(String value, Set<String> profiles, Set<String> skinHashes) {
+        if (value == null || value.isBlank()) return;
+        String trimmed = value.trim();
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            String hash = extractMinecraftTextureHash(trimmed);
+            if (!hash.isBlank()) skinHashes.add(hash);
+            return;
+        }
+        profiles.add(trimmed);
+    }
+
+    private String extractMinecraftTextureHash(String url) {
+        if (url == null) return "";
+        String marker = "/texture/";
+        int index = url.indexOf(marker);
+        if (index < 0) return "";
+        String hash = url.substring(index + marker.length());
+        int slash = hash.indexOf('/');
+        if (slash >= 0) hash = hash.substring(0, slash);
+        int query = hash.indexOf('?');
+        if (query >= 0) hash = hash.substring(0, query);
+        return hash.trim();
+    }
+
+    private String buildGeyserSkullsJson(Set<String> usernames, Set<String> profiles, Set<String> hashes) {
+        StringBuilder out = new StringBuilder(4096);
+        out.append("{\n  \"format_version\": 1,\n  \"skulls\": {\n");
+        appendJsonArray(out, "username", usernames, 4);
+        out.append(",\n");
+        appendJsonArray(out, "profile", profiles, 4);
+        out.append(",\n");
+        appendJsonArray(out, "skin_hash", hashes, 4);
+        out.append("\n  }\n}\n");
+        return out.toString();
+    }
+
+    private void appendJsonArray(StringBuilder out, String key, Set<String> values, int indent) {
+        String pad = " ".repeat(indent);
+        List<String> sorted = new ArrayList<>(values);
+        sorted.sort(String::compareTo);
+        out.append(pad).append('\"').append(key).append("\": [");
+        if (!sorted.isEmpty()) out.append('\n');
+        for (int i = 0; i < sorted.size(); i++) {
+            out.append(pad).append("  \"").append(jsonEscape(sorted.get(i))).append('\"');
+            if (i + 1 < sorted.size()) out.append(',');
+            out.append('\n');
+        }
+        if (!sorted.isEmpty()) out.append(pad);
+        out.append(']');
+    }
+
+    private String jsonEscape(String input) {
+        return input.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
 
     private void loadSkinMemorySettings() {
         skinMemoryEnabled = getConfig().getBoolean("skin-memory.enabled", true);
@@ -521,6 +687,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
                 return true;
             }
             loadConfiguration();
+            Bukkit.getScheduler().runTaskLater(this, this::syncGeyserSkullMappings, 1L);
             sender.sendMessage(message("reloaded"));
             return true;
         }
@@ -535,6 +702,18 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
         if (args.length > 0 && isNativeSkinSubcommand(args[0])) {
             return handleNativeSkinCommand(sender, args);
+        }
+
+        if (args.length > 0 && (args[0].equalsIgnoreCase("geysersync") || args[0].equalsIgnoreCase("syncgeyser"))) {
+            if (!sender.hasPermission("mdvaspectos.reload")) {
+                sender.sendMessage(message("no-permission"));
+                return true;
+            }
+            boolean changed = syncGeyserSkullMappings();
+            sender.sendMessage(color(changed
+                    ? "&aMapeo de cabezas Bedrock actualizado. &eReinicia Geyser/servidor para aplicarlo."
+                    : "&aEl mapeo de cabezas Bedrock ya estaba actualizado."));
+            return true;
         }
 
         if (args.length > 0 && (args[0].equalsIgnoreCase("reaplicar") || args[0].equalsIgnoreCase("aplicar"))) {
@@ -674,10 +853,19 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             return;
         }
 
-        String title = menuTitle.replace("{race}", catalog.key).replace("{race_display}", catalog.display);
-        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key), catalog.size, title);
+        if (bedrockMenuEnabled && isBedrockPlayer(player)) {
+            openBedrockAspectMenu(player, catalog);
+        } else {
+            openJavaAspectMenu(player, catalog);
+        }
+    }
 
-        if (fillEmptySlots) fillInventory(inventory);
+    /** Java conserva exactamente la disposicion y comportamiento historico. */
+    private void openJavaAspectMenu(Player player, Catalog catalog) {
+        String title = menuTitle.replace("{race}", catalog.key).replace("{race_display}", catalog.display);
+        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key, false), catalog.size, title);
+
+        if (fillEmptySlots) fillInventory(inventory, fillMaterial, fillName);
 
         for (SkinEntry entry : catalog.skins.values()) {
             if (entry.slot < 0 || entry.slot >= inventory.getSize()) {
@@ -700,11 +888,123 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         player.openInventory(inventory);
     }
 
-    private void fillInventory(Inventory inventory) {
-        ItemStack filler = new ItemStack(fillMaterial);
+    /**
+     * Bedrock sigue usando un inventario real, pero con menos filas, objetivos tactiles grandes
+     * y slots independientes de Java. Las cabezas siguen siendo PLAYER_HEAD: Geyser las
+     * traduce gracias al archivo de custom skull mappings generado por este plugin.
+     */
+    private void openBedrockAspectMenu(Player player, Catalog catalog) {
+        String title = bedrockMenuTitle.replace("{race}", catalog.key).replace("{race_display}", catalog.display);
+        Inventory inventory = Bukkit.createInventory(new AspectMenuHolder(catalog.key, true), bedrockMenuSize, title);
+
+        if (bedrockFillEmptySlots) fillInventory(inventory, bedrockFillMaterial, bedrockFillName);
+
+        List<SkinEntry> entries = new ArrayList<>(catalog.skins.values());
+        entries.sort((a, b) -> {
+            int bySlot = Integer.compare(a.slot, b.slot);
+            return bySlot != 0 ? bySlot : a.key.compareToIgnoreCase(b.key);
+        });
+        List<Integer> slots = resolveBedrockSkinSlots(catalog, entries.size());
+
+        for (int i = 0; i < entries.size(); i++) {
+            SkinEntry entry = entries.get(i);
+            int slot = resolveBedrockSkinSlot(catalog, entry, i, slots);
+            if (slot < 0 || slot >= inventory.getSize()) {
+                getLogger().warning("Slot Bedrock invalido para skin " + entry.key + " en catalogo " + catalog.key + ": " + slot);
+                continue;
+            }
+            inventory.setItem(slot, createBedrockSkinItem(entry, catalog));
+        }
+
+        Map<String, MenuButton> visibleButtons = new HashMap<>(globalButtons);
+        visibleButtons.putAll(catalog.buttons);
+        for (MenuButton button : visibleButtons.values()) {
+            MenuButton bedrockButton = resolveBedrockButton(button, catalog);
+            if (bedrockButton == null) continue;
+            if (bedrockButton.slot < 0 || bedrockButton.slot >= inventory.getSize()) {
+                getLogger().warning("Slot Bedrock invalido para boton " + button.key + " en catalogo " + catalog.key + ": " + bedrockButton.slot);
+                continue;
+            }
+            inventory.setItem(bedrockButton.slot, createButtonItem(bedrockButton, player, catalog));
+        }
+
+        player.openInventory(inventory);
+    }
+
+    private boolean isBedrockPlayer(Player player) {
+        try {
+            GeyserApi api = GeyserApi.api();
+            return api != null && api.isBedrockPlayer(player.getUniqueId());
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private ItemStack createBedrockSkinItem(SkinEntry entry, Catalog catalog) {
+        ItemStack item = createSkinItem(entry);
+        ConfigurationSection sec = bedrockMenu == null ? null : bedrockMenu.getConfigurationSection("catalogs." + catalog.key + ".skins." + entry.key);
+        if (sec == null) return item;
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return item;
+        String name = sec.getString("name", "");
+        if (name != null && !name.isBlank()) meta.setDisplayName(color(name));
+        if (sec.isList("lore")) meta.setLore(colorList(sec.getStringList("lore")));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private List<Integer> resolveBedrockSkinSlots(Catalog catalog, int count) {
+        if (bedrockMenu != null) {
+            List<Integer> catalogSlots = bedrockMenu.getIntegerList("catalogs." + catalog.key + ".skin-slots");
+            if (!catalogSlots.isEmpty()) return catalogSlots;
+            List<Integer> layout = bedrockMenu.getIntegerList("layouts." + Math.max(1, Math.min(9, count)));
+            if (!layout.isEmpty()) return layout;
+        }
+        return switch (count) {
+            case 1 -> List.of(13);
+            case 2 -> List.of(12, 14);
+            case 3 -> List.of(11, 13, 15);
+            case 4 -> List.of(11, 12, 14, 15);
+            case 5 -> List.of(10, 11, 12, 13, 14);
+            default -> List.of(10, 11, 12, 13, 14, 15, 16);
+        };
+    }
+
+    private int resolveBedrockSkinSlot(Catalog catalog, SkinEntry entry, int index, List<Integer> slots) {
+        if (bedrockMenu != null) {
+            String path = "catalogs." + catalog.key + ".skins." + entry.key + ".slot";
+            if (bedrockMenu.contains(path)) return bedrockMenu.getInt(path);
+        }
+        if (index < slots.size()) return slots.get(index);
+        return -1;
+    }
+
+    private MenuButton resolveBedrockButton(MenuButton base, Catalog catalog) {
+        if (bedrockMenu == null) return base;
+        ConfigurationSection sec = bedrockMenu.getConfigurationSection("catalogs." + catalog.key + ".buttons." + base.key);
+        if (sec == null) sec = bedrockMenu.getConfigurationSection("buttons." + base.key);
+        if (sec == null) return base;
+        if (!sec.getBoolean("enabled", true)) return null;
+        return new MenuButton(
+                base.key,
+                sec.getInt("slot", base.slot),
+                sec.getString("material", base.material),
+                Math.max(1, Math.min(64, sec.getInt("amount", base.amount))),
+                color(sec.getString("name", base.name)),
+                sec.isList("lore") ? colorList(sec.getStringList("lore")) : base.lore,
+                sec.getString("head-owner", base.headOwner),
+                readTexture(sec).isBlank() ? base.texture : readTexture(sec),
+                sec.isList("commands") ? new ArrayList<>(sec.getStringList("commands")) : base.commands,
+                sec.getBoolean("close-on-click", base.closeOnClick),
+                sec.getBoolean("console", base.console) || sec.getString("run-as", base.console ? "console" : "player").equalsIgnoreCase("console")
+        );
+    }
+
+    private void fillInventory(Inventory inventory, Material material, String displayName) {
+        ItemStack filler = new ItemStack(material);
         ItemMeta meta = filler.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(fillName);
+            meta.setDisplayName(displayName);
             filler.setItemMeta(meta);
         }
         for (int i = 0; i < inventory.getSize(); i++) inventory.setItem(i, filler);
@@ -1224,6 +1524,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         if (buttonEntryKey != null) {
             MenuButton button = catalog.buttons.get(buttonEntryKey);
             if (button == null) button = globalButtons.get(buttonEntryKey);
+            if (button != null && holder.bedrock) button = resolveBedrockButton(button, catalog);
             if (button != null) runButtonCommands(player, catalog, button);
             return;
         }
@@ -1295,6 +1596,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             List<String> options = new ArrayList<>();
             String current = args[0].toLowerCase(Locale.ROOT);
             if (sender.hasPermission("mdvaspectos.reload") && "reload".startsWith(current)) options.add("reload");
+            if (sender.hasPermission("mdvaspectos.reload") && "geysersync".startsWith(current)) options.add("geysersync");
             if (sender.hasPermission("mdvaspectos.skinmemory.admin") || sender.hasPermission("mdvaspectos.reload")) {
                 if ("aplicarskin".startsWith(current)) options.add("aplicarskin");
                 if ("recordarskin".startsWith(current)) options.add("recordarskin");
@@ -1478,9 +1780,11 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
 
     private static final class AspectMenuHolder implements InventoryHolder {
         private final String catalogKey;
+        private final boolean bedrock;
 
-        private AspectMenuHolder(String catalogKey) {
+        private AspectMenuHolder(String catalogKey, boolean bedrock) {
             this.catalogKey = catalogKey;
+            this.bedrock = bedrock;
         }
 
         @Override

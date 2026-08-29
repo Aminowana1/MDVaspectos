@@ -1,0 +1,82 @@
+# ============================================================
+# MDVAspectos - Menu exclusivo para jugadores Bedrock
+# ============================================================
+# Java NO usa este archivo. El menu Java sigue usando config.yml
+# con sus slots y tamano actuales.
+#
+# Bedrock sigue viendo un inventario real, no un Form.
+# Se usan 3 filas para que sea comodo con tactil, mando y PC.
+#
+# Las cabezas custom se sincronizan con Geyser como Custom Skulls.
+# La primera vez que el mapping cambie, reinicia Geyser/servidor.
+# ============================================================
+
+settings:
+  enabled: true
+  title: '&8Aspectos: {race_display}'
+  size: 27
+
+  fill-empty-slots: true
+  fill-material: BLACK_STAINED_GLASS_PANE
+  fill-name: ' '
+
+# Distribucion automatica de cabezas segun cuantas skins tenga la raza.
+# Los numeros son slots Bukkit (0-26 en un cofre de 3 filas).
+# Puedes cambiar estos layouts sin afectar Java.
+layouts:
+  '1': [13]
+  '2': [12, 14]
+  '3': [11, 13, 15]
+  '4': [11, 12, 14, 15]
+  '5': [10, 11, 12, 13, 14]
+  '6': [10, 11, 12, 13, 14, 15]
+  '7': [10, 11, 12, 13, 14, 15, 16]
+
+# Botones Bedrock. Si un boton no esta aqui, hereda el de config.yml.
+# Se puede sobrescribir slot, material, nombre, lore y comandos SOLO Bedrock.
+buttons:
+  social-main:
+    enabled: true
+    slot: 22
+    material: COMPASS
+    name: '&a&lMenu principal'
+    lore:
+      - '&7Volver a MDVSocial.'
+      - '&eToca para volver.'
+    close-on-click: true
+    commands:
+      - 'social main'
+
+# Opcional: personalizacion por raza/skin SOLO Bedrock.
+# Si no declaras nada, usa el nombre/lore de config.yml y el layout de arriba.
+#
+# Ejemplo:
+# catalogs:
+#   humano:
+#     skin-slots: [10, 11, 12, 13, 14, 15]
+#     skins:
+#       humano_0:
+#         slot: 10
+#         name: '&eHumano I'
+#         lore:
+#           - '&7Toca para usar este aspecto.'
+#     buttons:
+#       social-main:
+#         slot: 22
+catalogs: {}
+
+# ============================================================
+# Integracion de cabezas custom con Geyser
+# ============================================================
+# MDVAspectos resuelve las texturas de SkinsRestorer y genera:
+# plugins/Geyser-Spigot/custom_mappings/mdvaspectos_skulls.json
+#
+# Geyser necesita:
+# gameplay.enable-custom-content: true
+#
+# Si el JSON cambia, Geyser debe reiniciarse para regenerar su pack de skulls.
+# /geyser reload tambien lo hace, pero EXPULSA a los jugadores Bedrock conectados.
+geyser-skulls:
+  enabled: true
+  mapping-file: 'mdvaspectos_skulls.json'
+  debug: false

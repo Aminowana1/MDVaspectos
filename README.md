@@ -149,3 +149,20 @@ Permisos recomendados:
 ```
 
 El bloqueo se configura en `race-command-gate:` dentro de `config.yml`.
+
+## Bedrock / Geyser (1.2.0)
+
+MDVAspectos mantiene el inventario Java original y agrega un inventario Bedrock independiente en `plugins/MDVAspectos/MenusBedrock/aspectos.yml`.
+
+El menú Bedrock sigue siendo un cofre/inventario real (no Forms), con 27 slots y layouts centrados para móvil, mando/consola y PC Bedrock.
+
+Las cabezas de skins se sincronizan automáticamente con el sistema **Custom Skulls** de Geyser. MDVAspectos obtiene las propiedades de textura desde SkinsRestorer y genera `custom_mappings/mdvaspectos_skulls.json` dentro de la carpeta de Geyser.
+
+Requisitos en Geyser:
+
+```yaml
+gameplay:
+  enable-custom-content: true
+```
+
+Cuando el mapping cambie, reinicia Geyser o el servidor. También puedes ejecutar `/aspecto geysersync` para regenerarlo manualmente. `/geyser reload` recarga mappings, pero expulsa a los jugadores Bedrock conectados, por eso MDVAspectos no lo ejecuta automáticamente.
