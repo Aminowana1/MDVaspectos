@@ -1,0 +1,19 @@
+MDVAspectos 1.2.2 - RaceGate Bedrock / MDVSocial
+=================================================
+
+Problema corregido:
+- Un jugador Bedrock sin raza podía ser redirigido a /raza (GUI Java)
+  o terminar abriendo el menú principal Bedrock al usar el Libro del Viajero.
+
+Cambios:
+- Detección Bedrock: Floodgate primero, Geyser como fallback.
+- race-command-gate abre directamente el Form de razas de MDVSocial 1.6.7.
+- Java conserva redirect-command: raza.
+- Si MDVSocial no está disponible, Bedrock cae al redirect-command como fallback.
+- Las redirecciones se deduplican: nunca se apilan varios Forms/menús por spam.
+- Nueva config:
+    race-command-gate.bedrock-redirect.enabled: true
+    race-command-gate.bedrock-redirect.use-mdvsocial: true
+
+Recomendado:
+- Usar junto con MDVSocial 1.6.7 o superior.

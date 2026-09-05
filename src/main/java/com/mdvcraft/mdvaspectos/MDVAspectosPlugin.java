@@ -37,7 +37,9 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
 import org.bukkit.profile.PlayerTextures;
+import org.bukkit.scheduler.BukkitTask;
 import org.geysermc.geyser.api.GeyserApi;
+import org.geysermc.floodgate.api.FloodgateApi;
 
 import java.io.File;
 import java.io.IOException;
@@ -146,6 +148,12 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     private final Map<String, GateBlockedItem> raceCommandGateBlockedItems = new HashMap<>();
     private final Map<UUID, Long> raceGateLastNoticeAt = new ConcurrentHashMap<>();
 
+    // Redirección de raza Bedrock: MDVAspectos sigue siendo el dueño del gate,
+    // pero MDVSocial es quien renderiza el Form nativo de clases/razas.
+    private boolean raceCommandGateBedrockRedirectEnabled;
+    private boolean raceCommandGateBedrockUseMdvSocial;
+    private final Map<UUID, BukkitTask> raceGateRedirectTasks = new ConcurrentHashMap<>();
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -167,7 +175,7 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         Objects.requireNonNull(getCommand("aspecto")).setExecutor(this);
         Objects.requireNonNull(getCommand("aspecto")).setTabCompleter(this);
         Bukkit.getPluginManager().registerEvents(this, this);
-        getLogger().info("MDVAspectos habilitado con " + catalogs.size() + " catalogos.");
+        getLogger().info("MDVAspectos 1.2.2 habilitado con " + catalogs.size() + " catalogos. RaceGate Bedrock -> MDVSocial activo.");
     }
 
     private void loadConfiguration() {
@@ -480,6 +488,8 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
         raceCommandGateInteractionsEnabled = getConfig().getBoolean("race-command-gate.interactions.enabled", true);
         raceCommandGateBlockSigns = getConfig().getBoolean("race-command-gate.interactions.block-signs", true);
         raceCommandGateBlockItems = getConfig().getBoolean("race-command-gate.interactions.block-items", true);
+        raceCommandGateBedrockRedirectEnabled = getConfig().getBoolean("race-command-gate.bedrock-redirect.enabled", true);
+        raceCommandGateBedrockUseMdvSocial = getConfig().getBoolean("race-command-gate.bedrock-redirect.use-mdvsocial", true);
         loadRaceCommandGateBlockedItems();
 
         Set<String> allowed = new HashSet<>();
@@ -1009,6 +1019,18 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
     }
 
     private boolean isBedrockPlayer(Player player) {
+        if (player == null) return false;
+
+        // Floodgate conoce la identidad de la sesión y es la fuente principal.
+        try {
+            if (Bukkit.getPluginManager().isPluginEnabled("floodgate")
+                    && FloodgateApi.getInstance().isFloodgatePlayer(player.getUniqueId())) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        // Fallback para instalaciones donde solo la API de Geyser sea visible.
         try {
             GeyserApi api = GeyserApi.api();
             return api != null && api.isBedrockPlayer(player.getUniqueId());
@@ -1378,15 +1400,68 @@ public final class MDVAspectosPlugin extends JavaPlugin implements Listener, Com
             }
         }
 
-        String redirect = raceCommandGateRedirectCommand == null ? "raza" : raceCommandGateRedirectCommand.trim();
-        if (redirect.startsWith("/")) redirect = redirect.substring(1);
-        if (redirect.isBlank()) return;
-        String finalRedirect = redirect;
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (!player.isOnline()) return;
+        scheduleRaceCommandGateRedirect(player);
+    }
+
+    /**
+     * Programa una sola redirección por jugador. Si el usuario golpea un cartel,
+     * pulsa varias veces el Libro del Viajero o spamea comandos, conservamos la
+     * primera apertura pendiente en vez de apilar o postergar varios menús/forms.
+     */
+    private void scheduleRaceCommandGateRedirect(Player player) {
+        if (player == null) return;
+
+        UUID uuid = player.getUniqueId();
+        // Ya hay una apertura pendiente: no apilamos ni postergamos el Form.
+        if (raceGateRedirectTasks.containsKey(uuid)) return;
+
+        BukkitTask task = Bukkit.getScheduler().runTaskLater(this, () -> {
+            raceGateRedirectTasks.remove(uuid);
+            if (!player.isOnline() || hasRaceCommandGateAccess(player)) return;
+
             player.closeInventory();
-            Bukkit.dispatchCommand(player, finalRedirect);
+
+            // Bedrock NO debe ejecutar /raza: ese comando abre la GUI Java/MMOCore.
+            // Pedimos a MDVSocial su Form nativo de selección de clases.
+            if (raceCommandGateBedrockRedirectEnabled
+                    && isBedrockPlayer(player)
+                    && openMdvSocialBedrockRaceSelection(player)) {
+                debugRaceCommandGate("Selector Bedrock de raza abierto para " + player.getName());
+                return;
+            }
+
+            // Java, o fallback si MDVSocial no está disponible.
+            String redirect = raceCommandGateRedirectCommand == null ? "raza" : raceCommandGateRedirectCommand.trim();
+            if (redirect.startsWith("/")) redirect = redirect.substring(1);
+            if (redirect.isBlank()) return;
+            Bukkit.dispatchCommand(player, redirect);
         }, Math.max(0, raceCommandGateRedirectDelayTicks));
+
+        raceGateRedirectTasks.put(uuid, task);
+    }
+
+    /**
+     * Bridge sin dependencia dura: MDVSocial expone una API estática a partir de
+     * 1.6.7. Así MDVAspectos puede seguir arrancando aunque MDVSocial no esté.
+     */
+    private boolean openMdvSocialBedrockRaceSelection(Player player) {
+        if (!raceCommandGateBedrockUseMdvSocial) return false;
+        org.bukkit.plugin.Plugin socialPlugin = Bukkit.getPluginManager().getPlugin("MDVSocial");
+        if (socialPlugin == null || !socialPlugin.isEnabled()) return false;
+
+        try {
+            Class<?> api = Class.forName(
+                    "com.mdvcraft.mdvsocial.MDVSocialAPI",
+                    true,
+                    socialPlugin.getClass().getClassLoader());
+            Object result = api.getMethod("openBedrockRaceSelection", Player.class)
+                    .invoke(null, player);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable throwable) {
+            debugRaceCommandGate("No se pudo abrir selector Bedrock via MDVSocial: "
+                    + throwable.getClass().getSimpleName() + " - " + throwable.getMessage());
+            return false;
+        }
     }
 
     private boolean matchesRaceGateBlockedItem(Player player, ItemStack item) {

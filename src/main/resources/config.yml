@@ -104,8 +104,15 @@ race-command-gate:
   bypass-permission: 'mdvcraft.racegate.bypass'
   allow-ops: true
 
+  # Java usa este comando como siempre.
+  # En Bedrock, MDVAspectos intenta abrir directamente el Form de razas de
+  # MDVSocial y solo usa este comando si ese bridge no está disponible.
   redirect-command: 'raza'
   redirect-delay-ticks: 2
+
+  bedrock-redirect:
+    enabled: true
+    use-mdvsocial: true
 
   message:
     enabled: true
